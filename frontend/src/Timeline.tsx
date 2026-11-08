@@ -5,6 +5,8 @@
 // shows early warnings: each worn-pump alarm, spanning to the failure it preceded. A hollow ring on
 // a leak or wear bar marks where the fast rule raised the alarm ahead of confirmation. Two alert rows
 // compare a standard-check-only console ("Without") with ours ("With"); one lane per system follows.
+// The top edge drags to shrink the panel (the map gets the room); the lanes then scroll under the
+// fixed controls. Dragging back to full size, or double-clicking the edge, fits the content again.
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { eventKey, type DetectedEvent, type Scenario } from "./api";
@@ -38,6 +40,8 @@ const ROW_H = 10;
 const WARN_ROW_H = 22;
 const ALERT_ROW_H = 20;
 const DAY = 86400;
+const MIN_LANES_H = 40; // lane area left visible at the smallest size
+const RESIZE_KEY_STEP = 20;
 
 /** Greedy interval packing so overlapping spans get their own sub-row. */
 function pack<T>(items: T[], from: (x: T) => number, to: (x: T) => number, key: (x: T) => string): Map<string, number> {
@@ -71,6 +75,10 @@ export function Timeline({
   const [playing, setPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(2); // 4 h/s
   const track = useRef<HTMLDivElement>(null);
+  const section = useRef<HTMLElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | null>(null); // null: fit the content
+  const drag = useRef<{ y: number; h: number } | null>(null);
   const nowRef = useRef<number>(now);
   nowRef.current = now;
 
@@ -103,6 +111,30 @@ export function Timeline({
     const jump: number = e.shiftKey ? 3600 : step;
     if (e.key === "ArrowRight") onNow(clamp(now + jump));
     else if (e.key === "ArrowLeft") onNow(clamp(now - jump));
+    else return;
+    e.preventDefault();
+  }
+
+  /** Panel height kept between the controls plus a sliver of lanes and the full content. */
+  function sizeTo(h: number): void {
+    const s: HTMLElement | null = section.current;
+    const b: HTMLDivElement | null = body.current;
+    if (!s || !b) return;
+    const chrome: number = s.offsetHeight - b.clientHeight; // controls, legend, padding
+    if (h >= chrome + b.scrollHeight) fit();
+    else setHeight(Math.max(chrome + MIN_LANES_H, h));
+  }
+
+  /** Back to full size. The offset is dropped while the lanes still scroll, or the next shrink would reopen at it. */
+  function fit(): void {
+    if (body.current) body.current.scrollTop = 0;
+    setHeight(null);
+  }
+
+  function onResizeKey(e: KeyboardEvent<HTMLDivElement>): void {
+    const h: number = section.current?.offsetHeight ?? 0;
+    if (e.key === "ArrowDown") sizeTo(h - RESIZE_KEY_STEP);
+    else if (e.key === "ArrowUp") sizeTo(h + RESIZE_KEY_STEP);
     else return;
     e.preventDefault();
   }
@@ -152,7 +184,24 @@ export function Timeline({
   for (let d = Math.ceil(start / DAY) * DAY; d < end; d += DAY) days.push(d);
 
   return (
-    <section className="timeline">
+    <section className={`timeline ${height === null ? "" : "sized"}`} ref={section} style={height === null ? undefined : { height }}>
+      <div
+        className="timeline-resize"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize timeline"
+        tabIndex={0}
+        title="Drag to resize · double-click to fit"
+        onKeyDown={onResizeKey}
+        onDoubleClick={fit}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { y: e.clientY, h: section.current?.offsetHeight ?? 0 };
+        }}
+        onPointerMove={(e) => drag.current && sizeTo(drag.current.h - (e.clientY - drag.current.y))}
+        onPointerUp={() => (drag.current = null)}
+        onPointerCancel={() => (drag.current = null)}
+      />
       <div className="timeline-controls">
         <button onClick={() => setPlaying((p) => !p)} aria-label={playing ? "Pause" : "Play"}>
           {playing ? "❚❚" : "▶"}
@@ -192,7 +241,7 @@ export function Timeline({
           )}
         </span>
       </div>
-      <div className="timeline-body">
+      <div className="timeline-body" ref={body}>
         <div className="lane-labels">
           <span className="lane-label warn-label" style={{ height: warnHeight + 1 }} title="Early warnings: worn-pump alarms and the failure each preceded">
             ⚑ Warnings

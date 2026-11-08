@@ -220,13 +220,24 @@ ul { list-style: none; margin: 0; padding: 0; }
 .spark-ref { stroke: var(--muted); stroke-dasharray: 3 2; }
 
 /* ---------------------------------------------------------------- timeline */
-.timeline { grid-area: time; background: var(--panel); border-top: 1px solid var(--border); padding: 6px 16px 10px; user-select: none; }
+.timeline {
+  grid-area: time; position: relative; display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel); border-top: 1px solid var(--border); padding: 6px 16px 10px; user-select: none;
+}
+.timeline-resize { position: absolute; top: -5px; left: 0; right: 0; height: 10px; cursor: ns-resize; z-index: 6; touch-action: none; outline: none; }
+.timeline-resize::after {
+  content: ""; position: absolute; top: 3px; left: 50%; width: 40px; height: 4px; margin-left: -20px;
+  border-radius: 2px; background: var(--border);
+}
+.timeline-resize:hover::after, .timeline-resize:focus-visible::after { background: var(--accent); }
 .timeline-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .timeline-controls button { font: inherit; font-size: 12px; min-width: 34px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; }
 .timeline-controls button:disabled { opacity: 0.4; cursor: default; }
 .timeline-now { font-weight: 700; font-variant-numeric: tabular-nums; margin: 0 8px; }
 .busy { color: var(--muted); font-weight: 400; }
-.timeline-body { display: grid; grid-template-columns: 36px 1fr; }
+.timeline-body { display: grid; grid-template-columns: 36px 1fr; flex: 1 1 auto; min-height: 0; }
+/* Scroll only once shrunk: at full size the playhead's tail would otherwise add a 4px scrollbar. */
+.timeline.sized .timeline-body { overflow-y: auto; overscroll-behavior: contain; }
 .lane-labels { padding-top: 16px; }
 .lane-label { font: inherit; font-size: 11px; font-weight: 700; color: var(--muted); display: flex; align-items: center; width: 100%; padding: 0; background: none; border: 0; border-bottom: 1px solid transparent; cursor: pointer; }
 .lane-label.active { color: var(--accent); }
@@ -235,7 +246,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .track:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 4px; }
 .lane { position: relative; border-bottom: 1px solid var(--border); }
 .day-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--border); pointer-events: none; }
-.day-tick span { position: absolute; top: 0; left: 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.day-tick span {
+  position: sticky; top: 0; z-index: 4; display: inline-block; margin-left: 4px; padding: 0 2px;
+  font-size: 10px; color: var(--muted); white-space: nowrap; background: var(--panel);
+}
 .bar { position: absolute; height: 5px; border-radius: 3px; cursor: pointer; }
 .bar.pump_failure { background: var(--status-failure); }
 .bar.pipeline_leak { background: var(--leak); }
