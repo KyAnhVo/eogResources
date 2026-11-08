@@ -5,8 +5,8 @@
 import { useState } from "react";
 
 const SPONSORS: { name: string; file: string; initials: string; plate: string }[] = [
-  { name: "8090", file: "/sponsors/8090-mark.png", initials: "80", plate: "#1c1c1c" },
   { name: "EOG Resources", file: "/sponsors/eog.png", initials: "EOG", plate: "#ffffff" },
+  { name: "8090", file: "/sponsors/8090-mark.png", initials: "80", plate: "#1c1c1c" },
   { name: "Photon", file: "/sponsors/photon.png", initials: "P", plate: "#000000" },
   { name: "MLH", file: "/sponsors/mlh.png", initials: "MLH", plate: "#ffffff" },
 ];
