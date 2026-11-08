@@ -18,7 +18,6 @@ export function LiveView() {
   const [checked, setChecked] = useState<boolean>(false); // first poll answered
   const [offline, setOffline] = useState<boolean>(false);
   const [state, setState] = useState<EventsResponse | null>(null);
-  const [history, setHistory] = useState<EventsResponse | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [tab, setTab] = useState<"live" | "report">("live");
   const inflight = useRef<boolean>(false);
@@ -44,14 +43,10 @@ export function LiveView() {
     };
   }, []);
 
-  // The whole recording, once per dataset (report, totals).
+  // A new dataset on the console: start from its own state.
   const datasetId: string | null = live?.dataset_id ?? null;
   useEffect(() => {
-    setHistory(null);
     setState(null);
-    if (!live) return;
-    fetchState(live.dataset_id, live.end_unix).then(setHistory).catch(() => setHistory(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId]);
 
   // The state at the presenter's "now"; skipped while a request is out (the next poll catches up).
@@ -131,7 +126,7 @@ export function LiveView() {
             </>
           )}
           {tab === "report" &&
-            (history ? <IncidentDashboard state={history} onSelect={noop} earlyMode={early} /> : <p className="muted live-msg">Loading report…</p>)}
+            (state ? <IncidentDashboard state={state} onSelect={noop} earlyMode={early} /> : <p className="muted live-msg">Loading report…</p>)}
         </>
       )}
     </div>

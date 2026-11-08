@@ -4,7 +4,8 @@
 // - Confirmation: the evidence reached the standard threshold (pump faults are reported by the
 //   pump, so they are confirmed when detected).
 // - Early warning: a worn-pump alarm that preceded the same pump's failure; lead is alarm → fault.
-// Shown as its own page for the whole recording (the state as of the last reading).
+// Shown as its own page, in real time: the state as of the replay's "now", so incidents, decisions and
+// notifications appear as they happen.
 
 import { useEffect, useMemo, useState } from "react";
 import { eventKey, fetchContacts, type Category, type Contact, type DetectedEvent, type EventsResponse } from "./api";
@@ -210,7 +211,7 @@ export function IncidentDashboard({ state, onSelect, sent, earlyMode = true }: {
     <div className="incidents">
       <div className="inc-head">
         <h2>Incident report</h2>
-        <span className="muted">{state.dataset} · whole recording, to {state.now_ts.slice(0, 16).replace("T", " ")} UTC</span>
+        <span className="muted">{state.dataset} · live as of {state.now_ts.slice(0, 16).replace("T", " ")} UTC · updates as the replay runs</span>
         <button className="link-button small" onClick={() => downloadCsv(incidents, state.dataset)} disabled={!incidents.length}>
           Download CSV
         </button>

@@ -260,6 +260,30 @@ export default function App() {
     selectEvent(e);
   }
 
+  // The replay controls, on the console and on the incident report (so the report can be watched live).
+  const timeline =
+    info && network && history ? (
+    <Timeline
+      start={info.start_unix}
+      end={info.end_unix}
+      step={info.step_s}
+      now={now}
+      onNow={setNow}
+      recorded={history.events}
+      early={early}
+      onScenario={setScenario}
+      systems={network.systems.map((s) => s.id)}
+      selectedKey={selection?.kind === "event" ? selection.key : null}
+      onSelectEvent={(e) => {
+        setPage("console"); // from the report, an incident opens on the console
+        selectEvent(e);
+      }}
+      activeSystem={tab === OVERVIEW ? null : tab}
+      onSelectSystem={openTab}
+      busy={busy}
+    />
+    ) : null;
+
   const ready: boolean = Boolean(info && network && layout && shown && shownHistory);
   return (
     <div className={`app ${ready && page === "console" ? "console" : ""} ${page === "report" ? "report" : ""}`}>
@@ -302,12 +326,13 @@ export default function App() {
       {error && <p className="error">{error}</p>}
       {!files && <HomePage picker={<FolderPicker onPick={pickFolder} label="Choose dataset folder" />} />}
       {files && !ready && !error && <p className="muted">Loading {files.name}…</p>}
-      {ready && page === "report" && history && (
+      {ready && page === "report" && state && (
         <div className="report-page">
           <button className="back-button" onClick={() => setPage("console")}>
             ← Back to console
           </button>
-          <IncidentDashboard state={history} onSelect={openFromReport} sent={autoSent} earlyMode={early} />
+          <IncidentDashboard state={state} onSelect={openFromReport} sent={autoSent} earlyMode={early} />
+          {timeline}
         </div>
       )}
       {ready && page === "console" && info && network && layout && state && shown && history && shownHistory && (
@@ -376,22 +401,7 @@ export default function App() {
               />
             )}
           </div>
-          <Timeline
-            start={info.start_unix}
-            end={info.end_unix}
-            step={info.step_s}
-            now={now}
-            onNow={setNow}
-            recorded={history.events}
-            early={early}
-            onScenario={setScenario}
-            systems={network.systems.map((s) => s.id)}
-            selectedKey={selection?.kind === "event" ? selection.key : null}
-            onSelectEvent={selectEvent}
-            activeSystem={tab === OVERVIEW ? null : tab}
-            onSelectSystem={openTab}
-            busy={busy}
-          />
+          {timeline}
         </>
       )}
     </div>
