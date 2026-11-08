@@ -6,16 +6,22 @@ moment (GET /api/datasets/{id}/state?now=) without re-uploading. Every state req
 detection and plans from the telemetry up to `now`.
 
     uv run uvicorn app.main:app --port 8000
+
+When the built console exists (frontend/dist, or STATIC_DIR in the Docker image) it is served from
+the same origin, so the deployed site needs no proxy; under `make demo` Vite serves it instead.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from collections import OrderedDict
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from app.dataset import Dataset, parse_dataset, truncate
 from app.detect import Event, detect, iso
@@ -87,3 +93,27 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
         "events": [e.to_json() for e in events],
         "early_fix": fix.to_json(plans),
     }
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    """Liveness for the host's health check: the app imported and is serving."""
+    return {"status": "ok"}
+
+
+STATIC_DIR: Path = Path(
+    os.environ.get("STATIC_DIR", Path(__file__).resolve().parents[2] / "frontend" / "dist")
+).resolve()
+
+if (STATIC_DIR / "index.html").is_file():
+    # Registered last so every /api route wins. Unknown paths get index.html because the console
+    # picks its view from the URL (/live); unknown /api paths still 404 as JSON.
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def console(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file: Path = (STATIC_DIR / path).resolve()
+        if file.is_file() and file.is_relative_to(STATIC_DIR):
+            return FileResponse(file)
+        return FileResponse(STATIC_DIR / "index.html")

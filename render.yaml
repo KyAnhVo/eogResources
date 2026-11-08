@@ -1,0 +1,9 @@
+# Render Blueprint (Dashboard -> New -> Blueprint). Keep one always-on instance: uploaded datasets
+# and the presenter's live state are held in memory, so a second instance or a free-tier sleep loses them.
+services:
+  - type: web
+    name: beat-the-shutdown
+    runtime: docker
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /api/health
