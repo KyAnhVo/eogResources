@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 
 from app.dataset import Dataset, parse_dataset, truncate
@@ -29,6 +30,8 @@ from app.plan import FailurePlan, alert_order, plan_failures
 from app.whatif import EarlyFix, early_fix
 
 app: FastAPI = FastAPI(title="Beat the Shutdown")
+# State JSON and the JS bundle shrink ~14x / ~3x; phones on /live pull /state every time the presenter moves.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Most recently used datasets, oldest first. A handful covers switching between folders in a demo.
 MAX_DATASETS: int = 4
