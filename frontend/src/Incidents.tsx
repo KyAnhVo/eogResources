@@ -211,7 +211,7 @@ export function IncidentDashboard({ state, onSelect, sent, earlyMode = true }: {
     <div className="incidents">
       <div className="inc-head">
         <h2>Incident report</h2>
-        <span className="muted">{state.dataset} · live as of {state.now_ts.slice(0, 16).replace("T", " ")} UTC · updates as the replay runs</span>
+        <span className="muted">{state.dataset} · as of {state.now_ts.slice(0, 16).replace("T", " ")} UTC</span>
         <button className="link-button small" onClick={() => downloadCsv(incidents, state.dataset)} disabled={!incidents.length}>
           Download CSV
         </button>

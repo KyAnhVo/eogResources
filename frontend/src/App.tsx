@@ -260,7 +260,7 @@ export default function App() {
     selectEvent(e);
   }
 
-  // The replay controls, on the console and on the incident report (so the report can be watched live).
+  // The replay controls (console only; the incident report shows the state at the current "now").
   const timeline =
     info && network && history ? (
     <Timeline
@@ -274,10 +274,7 @@ export default function App() {
       onScenario={setScenario}
       systems={network.systems.map((s) => s.id)}
       selectedKey={selection?.kind === "event" ? selection.key : null}
-      onSelectEvent={(e) => {
-        setPage("console"); // from the report, an incident opens on the console
-        selectEvent(e);
-      }}
+      onSelectEvent={selectEvent}
       activeSystem={tab === OVERVIEW ? null : tab}
       onSelectSystem={openTab}
       busy={busy}
@@ -332,7 +329,6 @@ export default function App() {
             ← Back to console
           </button>
           <IncidentDashboard state={state} onSelect={openFromReport} sent={autoSent} earlyMode={early} />
-          {timeline}
         </div>
       )}
       {ready && page === "console" && info && network && layout && state && shown && history && shownHistory && (
