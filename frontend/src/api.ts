@@ -44,7 +44,8 @@ export interface DetectedEvent {
   status: "ongoing" | "resolved";
   onset_ts: string;
   onset_unix: number;
-  alarm_unix: number; // when the detector first fired (onset is back-dated from here)
+  alarm_unix: number; // when the detector first fired, "suspected" (onset is back-dated from here)
+  confirmed_unix: number | null; // when the evidence reached the standard threshold; null: not (yet)
   end_ts: string | null;
   end_unix: number | null;
   confidence: number;

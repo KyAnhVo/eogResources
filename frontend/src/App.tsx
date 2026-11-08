@@ -14,8 +14,8 @@ import {
 import { computeLayout, computeSystemLayout, type Layout } from "./layout";
 import { MapView, OVERVIEW } from "./MapView";
 import { FacilityPage, SUMMARY, type ComponentId } from "./FacilityPage";
-import { AlertList, CATEGORY_LABEL, EventAction, NetworkSummary } from "./panels";
-import { facilityViews, hhmm, type FacilityView } from "./status";
+import { ActionBar, AlertList, PendingBar } from "./panels";
+import { facilityViews, type FacilityView } from "./status";
 import { parseTelemetry, type Telemetry } from "./telemetry";
 import { SystemTabs } from "./SystemTabs";
 import { Timeline } from "./Timeline";
@@ -213,6 +213,22 @@ export default function App() {
           </nav>
           <div className="map-area">
             <SystemTabs network={network} views={views} active={tab} onSelect={openTab} />
+            {selectedEvent ? (
+              <ActionBar
+                event={selectedEvent}
+                now={now}
+                onOpenFacility={
+                  facility === selectedEvent.facility_id
+                    ? undefined
+                    : () => showFacility(selectedEvent.system_id, selectedEvent.facility_id, COMPONENT_OF[selectedEvent.category])
+                }
+                onClose={() => setSelection(null)}
+              />
+            ) : (
+              pendingEvent && (
+                <PendingBar event={pendingEvent} onJump={() => setNow(pendingEvent.alarm_unix)} onClose={() => setSelection(null)} />
+              )
+            )}
             {facilityView ? (
               <FacilityPage
                 view={facilityView}
@@ -242,45 +258,6 @@ export default function App() {
               />
             )}
           </div>
-          <aside className="panel right">
-            {selection && (
-              <button className="back-button" onClick={() => setSelection(null)} title="Back to the network summary (Esc)">
-                ← Network
-              </button>
-            )}
-            {selectedEvent ? (
-              <EventAction
-                event={selectedEvent}
-                onOpenFacility={
-                  facility === selectedEvent.facility_id
-                    ? undefined
-                    : () => showFacility(selectedEvent.system_id, selectedEvent.facility_id, COMPONENT_OF[selectedEvent.category])
-                }
-              />
-            ) : pendingEvent ? (
-              <section className="detail">
-                <h2>
-                  {CATEGORY_LABEL[pendingEvent.category]} · {pendingEvent.asset_id}
-                </h2>
-                <p className="meta">
-                  Not known at this time: first detected {new Date(pendingEvent.alarm_unix * 1000).toISOString().slice(5, 10)} at{" "}
-                  {hhmm(pendingEvent.alarm_unix)}.
-                </p>
-                <button className="link-button" onClick={() => setNow(pendingEvent.alarm_unix)}>
-                  Jump to detection
-                </button>
-              </section>
-            ) : (
-              <NetworkSummary
-                network={network}
-                ops={ops}
-                views={views}
-                onSystem={openTab}
-                onFacility={(id) => openFacility(id)}
-                onSelect={selectEvent}
-              />
-            )}
-          </aside>
           <Timeline
             start={info.start_unix}
             end={info.end_unix}

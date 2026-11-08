@@ -29,7 +29,8 @@ frontend/                    Vite + React + TypeScript
   src/SystemTabs.tsx         Overview + one tab per system, with live badges
   src/HoverCard.tsx          readings + 6 h sparkline for whatever the mouse is over
   src/Timeline.tsx           "now" slider, play/step controls, event lanes per system
-  src/panels.tsx             alert list, event detail (plan, evidence, charts), facility detail
+  src/early.ts               links each worn-pump alarm to the failure it preceded (lead time)
+  src/panels.tsx             alert list, action strip, event card (evidence, plan) for the facility page
   src/LineChart.tsx          dependency-free SVG chart
   src/App.tsx                folder picker, replay state, layout of the console
 Makefile                     install / demo / score / typecheck
@@ -145,7 +146,7 @@ All in `backend/app/detect.py`. None is specific to a dataset.
 | `EFFICIENCY_SIGMA`             | 0.006  | Measured noise, full_week healthy rows                                     |
 | `DISCHARGE_PSI_PER_EFFICIENCY` | 370    | Unsupervised fit, full_week running rows                                   |
 | `CUSUM_K`                      | 1.0 σ  | Tuning                                                                     |
-| `CUSUM_H`                      | 10 σ   | Leak CUSUM threshold, tuning                                               |
+| `CUSUM_H`                      | 10 σ   | Leak CUSUM threshold; also the confirmation threshold for leaks and wear   |
 | `WEAR_CUSUM_H`                 | 6 σ    | backend/research/sweep.py: 0 false alarms; H=4 gives 1                     |
 | `LEAK_SPIKE_Z`                 | 4.5 σ  | backend/research/sweep.py: 0 false alarms; 4.0 to 5.0 give the same delays |
 | `CLEAR_RUN`                    | 6 rows | Tuning                                                                     |
@@ -176,6 +177,8 @@ Ongoing/resolved status matches every snapshot key except one: EVENT_17 at `snap
 
 ## Early detection (backend/research/)
 
+**Two stages per leak and worn pump (`cusum_spans`, `Span.confirm`).** The fast rules (a single leak reading over 4.5σ; wear CUSUM over 6) set `alarm_unix`, which counts as *suspected*. The same CUSUM keeps accumulating, and the first row where it passes the standard `CUSUM_H` = 10 sets `confirmed_unix`. A span that clears, or is cut by a fault, before reaching it keeps `confirmed_unix = null` ("never confirmed"). The score still uses `alarm_unix`, so the results don't change (72/0/0, plans 36/36). On full_week the suspected alarm comes before confirmation by 5/10/10/5/10 min for leaks and 15/15/20/5/5 min for wear. The wear gaps are smaller than the 15–60 min gain over the old detector below, because confirmation uses the improved combined score, not the old flow-only one.
+
 The question: can leaks, worn pumps or failures be flagged at least 2 intervals (10 min) sooner by
 combining the sensors around a facility? Run from `backend/`:
 
@@ -197,11 +200,11 @@ problems abruptly, so "earlier" can only mean alarming sooner after onset.
 
 **2. Results** (`sweep.py`, fixed thresholds, 0 FA):
 
-| Problem | Old detector | Now | Gain per event |
-|---|---|---|---|
-| Leak | CUSUM H=10: 65 / 10 / 20 / 10 / 10 | + one reading > 4.5σ: 60 / 0 / 10 / 5 / 0 | +5, +10, +10, +5, +10 |
-| Worn pump | CUSUM flow H=10: 190 / 180 / 190 / 155 / 180 | flow + discharge H=6: 155 / 140 / 130 / 115 / 165 | +35, +40, +60, +40, +15 |
-| Pump failure | status = 2: 0 | the same | 0 |
+| Problem      | Old detector                                 | Now                                               | Gain per event          |
+| ------------ | -------------------------------------------- | ------------------------------------------------- | ----------------------- |
+| Leak         | CUSUM H=10: 65 / 10 / 20 / 10 / 10           | + one reading > 4.5σ: 60 / 0 / 10 / 5 / 0         | +5, +10, +10, +5, +10   |
+| Worn pump    | CUSUM flow H=10: 190 / 180 / 190 / 155 / 180 | flow + discharge H=6: 155 / 140 / 130 / 115 / 165 | +35, +40, +60, +40, +15 |
+| Pump failure | status = 2: 0                                | the same                                          | 0                       |
 
 - **Leaks:** 4 of 5 are now caught at the first reading where a leak can physically show.
   EVENT_1 and EVENT_10 began with the pump off, and the leak is invisible until the pump runs.
@@ -366,7 +369,7 @@ TOTAL matched 72  missed 0  false positives 0  plans matching key 36/36
 | `POST /api/datasets` (multipart: files `network`, `ops`, `telemetry`; field `name`) | `{dataset_id, name, start_unix, end_unix, step_s}`, or 400 with a message on malformed files |
 | `GET /api/datasets/{dataset_id}/state?now=` | `{dataset, start_unix, now_unix, now_ts, alert_order[], events[]}` as known at `now` (default: the last reading); 404 if the id is unknown, 400 if `now` is before the first reading |
 
-Each event follows the SPEC.md `events.json` shape: `event_id` (EV-0001… in onset order), `system_id`, `facility_id`, `asset_id`, `category`, `status`, `onset_ts/unix`, `end_ts/unix`, `alarm_unix` (when the detector first fired; onset is back-dated from it), `confidence`, `evidence[]`, `hours_to_limit` (ongoing pump failures only), `recommended_actions[]`. Leaks and worn pumps carry `field_inspection`. Pump failures carry their plan as `dispatch_truck` / `shut_in_wells` actions, or `none`. They also carry `planning`:
+Each event follows the SPEC.md `events.json` shape: `event_id` (EV-0001… in onset order), `system_id`, `facility_id`, `asset_id`, `category`, `status`, `onset_ts/unix`, `end_ts/unix`, `alarm_unix` (when the detector first fired, i.e. suspected; onset is back-dated from it), `confirmed_unix` (when the same CUSUM first passed `CUSUM_H`; equals `alarm_unix` for pump faults, null if not reached), `confidence`, `evidence[]`, `hours_to_limit` (ongoing pump failures only), `recommended_actions[]`. Leaks and worn pumps carry `field_inspection`. Pump failures carry their plan as `dispatch_truck` / `shut_in_wells` actions, or `none`. They also carry `planning`:
 - `plan_mode`, `planned_at_unix`, `level_pct`
 - `hours_to_limit`, `trips_at_unix`, `repair_end_unix`, `tripped`
 - `lost_revenue_per_hour`
@@ -384,7 +387,8 @@ Desktop layout: header across the top, alerts on the left, the map in the centre
 
 - **Moving "now".** The timeline sets "now" to any reading in the recording. You can drag along the track, use ±5 min and ±1 h, use the arrow keys (Shift for hours), press "Latest", or press play at 1, 4 or 12 hours per second.
 - **What the app knows at "now".** Every move asks the backend for the state at "now". Requests are latest-wins: while one is running, only the newest "now" is remembered and sent next. So dragging and playing never queue up a backlog, and "updating…" shows while one is out.
-- **Event lanes.** Each system gets a lane of event bars, taken from the whole recording so interesting moments are easy to find. The part after "now" is dimmed: the bars are a navigation aid, not knowledge the app had. Clicking a bar jumps to the moment that event was **first detected** (`alarm_unix`) and selects it.
+- **Event lanes.** Each system gets a lane of event bars, taken from the whole recording so interesting moments are easy to find. The part after "now" is dimmed: the bars are a navigation aid, not knowledge the app had. Clicking a bar jumps to the moment that event was **first detected** (`alarm_unix`) and selects it. Worn-pump bars are striped, to read as a forecast rather than a breakdown. A hollow ring on a leak or wear bar marks the suspected alarm when it came before confirmation; the tooltip gives both times.
+- **Early-warning lane (⚑, top).** One span per worn-pump alarm, from the alarm to the failure it preceded. A span that ends in a failure fades from amber to red with a red end cap and reads "S4_PUMP_C · 33 h warning". One with no failure after it is pale and reads "no failure". Until its outcome has happened at "now" it reads "may fail", so the label never states the future. Clicking a span selects the wear alarm.
 - **Stable selection while scrubbing.** Event IDs are numbered in onset order as of "now", so they can shift. A worn pump detected later can have an earlier, back-dated onset. Selection therefore uses asset + category + onset, which is stable.
 - **Selecting a future event.** If you select an event that hasn't been detected yet at "now", the detail panel says so and offers to jump to its detection.
 
@@ -394,12 +398,12 @@ The map has an **Overview** tab with every system, and **one tab per system**.
 - **A system tab draws only that system**, laid out with roomier spacing and scaled to that system alone. A two-facility system fills the canvas as well as a four-facility one, at about 1.4× zoom on a laptop screen.
 - **Every tab carries a live badge:** alerts in progress (coloured by the worst problem), plus the soonest shutdown countdown or "shut in". That way a problem in a system you're not looking at stays visible.
 - **A tab flashes for a few seconds** when a new alert appears in it while another tab is open. The app never switches tabs on its own.
-- **Opening a tab:** click it, a system's name on the Overview, its card in the network summary, or its timeline lane label. Picking an alert anywhere (left list, summary card, timeline bar) opens that alert's facility page inside its system tab.
+- **Opening a tab:** click it, a system's name on the Overview, or its timeline lane label. Picking an alert anywhere (left list, timeline bar) opens that alert's facility page inside its system tab.
 - **Each tab gets a fresh canvas fitted to what it draws.** The alert list on the left stays global, because the spec's alert order covers all systems; the open tab's timeline lane is highlighted.
 
 ### Facility page (`FacilityPage.tsx`)
 
-A third map level under a system tab (Overview › S4 › FACILITY A). It replaces the map canvas, because time-series charts need more width than the right panel has.
+A third map level under a system tab (Overview › S4 › FACILITY A). It replaces the map canvas, because time-series charts need the width.
 
 - **Process diagram.** Wells → tank → pump → pipeline → disposal site, left to right in the direction the water flows. The layout is fixed: no coordinates, nothing moves. Each card shows its live readings at "now" and its state: well producing or shut in, tank fill against the warning and shutdown lines, pump running/off/fault, pipeline flow and % lost. Components with an ongoing event carry a badge. Links animate while water moves through them and turn orange on a leak. The disposal site is shown but can't be selected; it has no sensors of its own.
 - **Charts for the selected component**, raw readings only. With nothing selected, a facility summary shows tank level, inflow vs pumped, pipeline pressure and discharge pressure. Clicking a component again goes back to the summary.
@@ -412,7 +416,7 @@ A third map level under a system tab (Overview › S4 › FACILITY A). It replac
 | Pipeline | pressure at the disposal site, pumped vs received | healthy pressure (disposal + 50) |
 
 - **One time axis.** Every chart ends at "now", showing nothing the operator couldn't have seen. The window is 6 h, 24 h (default), 3 d or the whole run. Hovering any chart draws a crosshair on all of them, and each legend shows the values at that moment (the latest values otherwise).
-- **Shading.** Grey for pump off and red for pump fault, on the pressure and flow charts, because those readings only mean something while pumping. Events known as of "now" get a tinted span from onset to end, with a dashed tick where the detector fired (`alarm_unix`).
+- **Shading.** Grey for pump off and red for pump fault, on the pressure and flow charts, because those readings only mean something while pumping. Events known as of "now" get a tinted span from onset to end, with a dashed tick where the alarm was raised (`alarm_unix`) and a solid tick where it was confirmed (`confirmed_unix`), when that is later.
 - **Navigation.** Esc first clears the selected alert, then closes the page. "← S4 map" or any tab also closes it. Picking an alert anywhere opens its facility page on the component that shows it: pump for failures and wear, pipeline for leaks.
 - **Event card.** The selected alert's details sit between the diagram and the charts: onset, detection time, confidence, the evidence lines and, for pump failures, how the plan was chosen with the options table.
 
@@ -435,7 +439,7 @@ A third map level under a system tab (Overview › S4 › FACILITY A). It replac
   - glowing orange with a "−x %" badge (water not arriving) during a leak.
 - **Trucks.** When an ongoing failure's plan sends trucks, a dashed amber route runs from the yard to the facility, labelled with trucks × trips and the first arrival time. The yard shows how many trucks are free.
 - **On the Overview, each system sits on a tinted disc** with its name and alert count at the top, tinted by its worst problem: red for a failure, orange for a leak, yellow for a worn pump. Clicking the name opens that system's tab. The disc lets the mouse through to the pipes and nodes behind it.
-- **Clicking** a facility, well or pipe opens that facility's page (below), with the well or pipeline already selected. If something is in progress there, its most urgent alert fills the right panel.
+- **Clicking** a facility, well or pipe opens that facility's page (below), with the well or pipeline already selected. If something is in progress there, its most urgent alert fills the action strip.
 - **Hover cards** show readings at "now" plus a 6 h sparkline:
   - **Facility:** tank, inflow and wells on, pump state and flow against rated, discharge, countdown, plan.
   - **Pipe:** pumped against received flow, % lost and pressure against healthy while running, or why a leak can't show while it's idle.
@@ -445,12 +449,11 @@ A third map level under a system tab (Overview › S4 › FACILITY A). It replac
 ### Side panels
 
 - **Left:** the alerts list.
-  - **In progress**, in the backend's `alert_order`, with countdown chips.
-  - **Resolved**, most recently ended first.
-- **The right panel holds navigation and required actions only: no readings, no charts.** With nothing selected, it shows one card per system, most urgent first. Each card lists alerts in progress, trucks free, one button per facility coloured by its status (with a leak underline), and the ongoing alerts as links. The system name opens its map tab and a facility button opens its facility page.
-- **Right, alert selected:** what to do and by when. That means the countdown (pump failures), the recommended action, and "Open facility →" when its page isn't already open. Evidence, plan details and the options table are on the facility page. "← Network", Esc, or a click on empty map goes back to the summary.
-  - **Pump failure:** the plan with clock times, the countdown, how the fleet was shared, and the options table.
-  - **Every event:** evidence lines and two charts, from 12 h before onset up to "now", never past it.
-  - **Leak and worn-pump charts** show pump-running samples only, with dashed healthy and rated reference lines.
-  - **A facility with nothing wrong:** its readings and the last 24 h of tank level.
+  - **In progress**, in the backend's `alert_order`, with countdown chips. Ongoing worn pumps are left out here and shown below.
+  - **⚑ Early warnings**, in an amber box: ongoing worn pumps, each with "may fail · worn for N h".
+  - **Resolved**, most recently ended first. A failure with a wear alarm before it shows "⚑ warned 33 h ahead"; that wear alarm shows "⚑ failed 33 h later".
+- **Suspected → confirmed (`early.ts`).** Each row adds "◌ suspected 02:00 · not confirmed yet" and then "◌ flagged 10 min before confirmation". The action strip shows a dashed "◌ Suspected" chip, then "● Confirmed · flagged N min sooner". The event card gives both times.
+- **Early-warning link (`early.ts`).** The wear detector stops at the fault row (fault is a CUSUM break), so a wear event whose `end_unix` equals the same pump's failure `onset_unix` is that failure's warning, and lead = failure onset − wear alarm. The left list links only events known at "now". The timeline links over the whole recording. In full_week, 3 of 5 wear alarms preceded a failure, 33–34 h ahead (S1_PUMP_C, S3_PUMP_A, S4_PUMP_C); S2_PUMP_A and S5_PUMP_A ended without one.
+- **No right panel.** Navigation is the system tabs (with alert counts and the soonest countdown), the maps, and the alert list. Trucks free are on each system's yard node on the map.
+- **Action strip, alert selected:** a single row between the tabs and the map or facility page, with a left border coloured by category. It shows what to do and by when: the alert, the countdown (pump failures), "Action required" with the recommended action, "Open facility →" when that page isn't already open, and × to deselect (also Esc, or a click on empty map). Evidence, plan details and the options table are on the facility page. A timeline bar not yet known at "now" gets the same strip, with "Jump to detection".
 - **Telemetry for the map and charts** comes from the whole CSV, parsed once in the browser (23 MB, about 393k rows).

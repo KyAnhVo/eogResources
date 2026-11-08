@@ -273,7 +273,7 @@ export function FacilityPage({ view, network, telemetry, events, selected, now, 
         </div>
       </div>
 
-      {selected && <EventInfo event={selected} />}
+      {selected && <EventInfo event={selected} now={now} />}
 
       <div className="fp-charts-head">
         <h3>{componentLabel(component, f)}</h3>
@@ -306,11 +306,13 @@ export function FacilityPage({ view, network, telemetry, events, selected, now, 
               ...(spec.pumpShade ? shade : []),
               ...relevant.map((e) => ({ from: e.onset_unix, to: e.end_unix ?? now, className: `ev-band ${e.category}` })),
             ];
-            const markers: Marker[] = relevant.map((e) => ({
-              t: e.alarm_unix,
-              label: `${CATEGORY_LABEL[e.category]} detected ${hhmm(e.alarm_unix)}`,
-              className: `alarm-marker ${e.category}`,
-            }));
+            // Dashed: when the alarm was raised (suspected). Solid: when it was confirmed, if later.
+            const markers: Marker[] = relevant.flatMap((e) => [
+              { t: e.alarm_unix, label: `${CATEGORY_LABEL[e.category]} suspected ${hhmm(e.alarm_unix)}`, className: `alarm-marker ${e.category}` },
+              ...(e.confirmed_unix !== null && e.confirmed_unix > e.alarm_unix && e.confirmed_unix <= now
+                ? [{ t: e.confirmed_unix, label: `Confirmed ${hhmm(e.confirmed_unix)}`, className: `confirm-marker ${e.category}` }]
+                : []),
+            ]);
             return (
               <LineChart
                 key={spec.title}

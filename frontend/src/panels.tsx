@@ -1,16 +1,15 @@
-// Side panels: alert list, the right panel (action required, network navigation), and the event
-// details shown on the facility page.
+// Alert list (left panel), the action strip above the map, and the event details shown on the
+// facility page.
 
 import {
   eventKey,
   type Category,
   type DetectedEvent,
   type EventsResponse,
-  type Network,
-  type Ops,
   type Planning,
 } from "./api";
-import { STATUS_LABEL, hhmm, money, shortName, type FacilityView } from "./status";
+import { earlyWarnings, hoursText, isSuspected, soonerMinutes, stageText, warningIndex, type Warning } from "./early";
+import { hhmm, money, shortName } from "./status";
 
 export const CATEGORY_LABEL: Record<Category, string> = {
   pump_failure: "Pump failure",
@@ -74,35 +73,84 @@ function PlanPanel({ event }: { event: DetectedEvent }) {
 }
 
 /** Right panel: only what to do and by when, plus a way to the details. */
-export function EventAction({ event, onOpenFacility }: { event: DetectedEvent; onOpenFacility?: () => void }) {
+/** Strip above the map: what to do and by when for the selected alert, nothing else. */
+export function ActionBar({ event, now, onOpenFacility, onClose }: {
+  event: DetectedEvent;
+  now: number;
+  onOpenFacility?: () => void;
+  onClose: () => void;
+}) {
   const p: Planning | null = event.planning;
   const ongoing: boolean = event.status === "ongoing";
+  const suspected: boolean = event.category !== "pump_failure" && isSuspected(event, now);
+  const sooner: number | null = soonerMinutes(event);
   return (
-    <section className="detail action-card">
-      <h2>
-        {CATEGORY_LABEL[event.category]} · {event.asset_id}
-      </h2>
-      {p && <p className="countdown">{countdownText(p, ongoing)}</p>}
-      <p className="action-label">{ongoing ? "Action required" : `Resolved ${event.end_ts?.slice(5, 16).replace("T", " ")} · was planned`}</p>
-      <p className="action">{actionText(event)}</p>
+    <section className={`action-bar ${event.category} ${ongoing ? "" : "resolved"}`}>
+      <div className="action-what">
+        <strong>
+          {CATEGORY_LABEL[event.category]} · {event.asset_id}
+          {suspected && <span className="stage-chip suspected" title="The fast rule fired; the standard threshold hasn't been reached yet">◌ Suspected</span>}
+          {!suspected && event.category !== "pump_failure" && sooner !== null && sooner > 0 && (
+            <span className="stage-chip confirmed" title={`Suspected ${hhmm(event.alarm_unix)}, confirmed ${hhmm(event.confirmed_unix ?? 0)}`}>
+              ● Confirmed · flagged {sooner} min sooner
+            </span>
+          )}
+        </strong>
+        {p && <span className="countdown">{countdownText(p, ongoing)}</span>}
+      </div>
+      <div className="action-do">
+        <span className="action-label">{ongoing ? "Action required" : `Resolved ${event.end_ts?.slice(5, 16).replace("T", " ")} · was planned`}</span>
+        <span className="action">{actionText(event)}</span>
+      </div>
       {onOpenFacility && (
-        <button className="link-button" onClick={onOpenFacility}>
+        <button className="link-button small" onClick={onOpenFacility}>
           Open {shortName(event.facility_id)} →
         </button>
       )}
+      <button className="action-close" onClick={onClose} title="Deselect (Esc)" aria-label="Deselect">
+        ×
+      </button>
+    </section>
+  );
+}
+
+/** Same strip for an alert picked on the timeline that isn't known yet at `now`. */
+export function PendingBar({ event, onJump, onClose }: { event: DetectedEvent; onJump: () => void; onClose: () => void }) {
+  return (
+    <section className="action-bar resolved">
+      <div className="action-what">
+        <strong>
+          {CATEGORY_LABEL[event.category]} · {event.asset_id}
+        </strong>
+        <span className="muted">
+          Not known at this time: first detected {new Date(event.alarm_unix * 1000).toISOString().slice(5, 10)} at {hhmm(event.alarm_unix)}
+        </span>
+      </div>
+      <button className="link-button small" onClick={onJump}>
+        Jump to detection
+      </button>
+      <button className="action-close" onClick={onClose} title="Deselect (Esc)" aria-label="Deselect">
+        ×
+      </button>
     </section>
   );
 }
 
 /** Facility page: why the event fired and how the plan was chosen. */
-export function EventInfo({ event }: { event: DetectedEvent }) {
+export function EventInfo({ event, now }: { event: DetectedEvent; now: number }) {
+  const confirmed: string =
+    event.category === "pump_failure" || event.confirmed_unix === event.alarm_unix
+      ? `detected ${hhmm(event.alarm_unix)}`
+      : isSuspected(event, now)
+        ? `suspected ${hhmm(event.alarm_unix)}, not confirmed`
+        : `suspected ${hhmm(event.alarm_unix)} · confirmed ${hhmm(event.confirmed_unix ?? 0)} (${soonerMinutes(event)} min sooner)`;
   return (
     <section className="event-info">
       <h3>
         {CATEGORY_LABEL[event.category]} · {event.asset_id}
       </h3>
       <p className="meta">
-        {event.status} · onset {event.onset_ts.slice(5, 16).replace("T", " ")} · detected {hhmm(event.alarm_unix)}
+        {event.status} · onset {event.onset_ts.slice(5, 16).replace("T", " ")} · {confirmed}
         {event.end_ts && ` · ended ${event.end_ts.slice(5, 16).replace("T", " ")}`} · confidence {Math.round(event.confidence * 100)}%
       </p>
       <ul>
@@ -115,10 +163,25 @@ export function EventInfo({ event }: { event: DetectedEvent }) {
   );
 }
 
-export function EventRow({ event, selected, onSelect }: { event: DetectedEvent; selected: boolean; onSelect: () => void }) {
+/** Early-warning line under a row: a wear alarm that preceded a failure, seen from either end. */
+function warningNote(e: DetectedEvent, w: Warning | undefined, now: number): string | null {
+  if (e.category === "pump_degradation" && e.status === "ongoing") {
+    return now > e.alarm_unix ? `may fail · worn for ${hoursText((now - e.alarm_unix) / 3600)}` : "may fail · just detected";
+  }
+  if (!w?.failure || w.leadHours === undefined) return null;
+  return e.category === "pump_degradation" ? `failed ${hoursText(w.leadHours)} later` : `warned ${hoursText(w.leadHours)} ahead`;
+}
+
+export function EventRow({ event, selected, onSelect, note, stage }: {
+  event: DetectedEvent;
+  selected: boolean;
+  onSelect: () => void;
+  note?: string | null; // early warning (worn pump → failure)
+  stage?: string | null; // suspected / flagged before confirmation
+}) {
   return (
     <li>
-      <button className={`row ${event.category} ${selected ? "selected" : ""}`} onClick={onSelect}>
+      <button className={`row ${event.category} ${selected ? "selected" : ""} ${note ? "early" : ""}`} onClick={onSelect}>
         <span className="cat">{CATEGORY_LABEL[event.category]}</span>
         <span className="asset">{event.asset_id}</span>
         <span className="when">{event.onset_ts.slice(5, 16).replace("T", " ")}</span>
@@ -131,11 +194,12 @@ export function EventRow({ event, selected, onSelect }: { event: DetectedEvent; 
                 : `${event.hours_to_limit?.p50.toFixed(1)} h`}
           </span>
         )}
+        {stage && <span className="stage-note">◌ {stage}</span>}
+        {note && <span className="early-note">⚑ {note}</span>}
       </button>
     </li>
   );
 }
-
 
 export function AlertList({ state, selectedKey, onSelect }: {
   state: EventsResponse;
@@ -143,78 +207,38 @@ export function AlertList({ state, selectedKey, onSelect }: {
   onSelect: (e: DetectedEvent) => void;
 }) {
   const byId = new Map<string, DetectedEvent>(state.events.map((e) => [e.event_id, e]));
-  const ongoing: DetectedEvent[] = state.alert_order.flatMap((id) => byId.get(id) ?? []);
+  const inProgress: DetectedEvent[] = state.alert_order.flatMap((id) => byId.get(id) ?? []);
+  // Ongoing wear is a forecast, not a breakdown: it gets its own section so it isn't read as one.
+  const warnings: DetectedEvent[] = inProgress.filter((e) => e.category === "pump_degradation");
+  const ongoing: DetectedEvent[] = inProgress.filter((e) => e.category !== "pump_degradation");
   const resolved: DetectedEvent[] = state.events
     .filter((e) => e.status === "resolved")
     .sort((a, b) => (b.end_unix ?? 0) - (a.end_unix ?? 0));
+  const links: Map<string, Warning> = warningIndex(earlyWarnings(state.events)); // only what is known at "now"
   const row = (e: DetectedEvent) => (
-    <EventRow key={eventKey(e)} event={e} selected={eventKey(e) === selectedKey} onSelect={() => onSelect(e)} />
+    <EventRow
+      key={eventKey(e)}
+      event={e}
+      selected={eventKey(e) === selectedKey}
+      onSelect={() => onSelect(e)}
+      note={warningNote(e, links.get(eventKey(e)), state.now_unix)}
+      stage={stageText(e, state.now_unix)}
+    />
   );
   return (
     <>
       <h2>In progress ({ongoing.length})</h2>
       {ongoing.length === 0 && <p className="muted">Nothing in progress.</p>}
       <ul>{ongoing.map(row)}</ul>
+      {warnings.length > 0 && (
+        <div className="early-section">
+          <h2>⚑ Early warnings ({warnings.length})</h2>
+          <p className="muted">A worn pump is the only sign seen before a failure: inspect it before it faults.</p>
+          <ul>{warnings.map(row)}</ul>
+        </div>
+      )}
       <h2>Resolved ({resolved.length})</h2>
       <ul>{resolved.map(row)}</ul>
     </>
-  );
-}
-
-const STATUS_RANK: Record<FacilityView["status"], number> = { tripped: 4, failure: 3, wear: 2, warning: 1, ok: 0 };
-
-/** Right panel when nothing is selected: one card per system, most urgent first. */
-export function NetworkSummary({ network, ops, views, onSystem, onFacility, onSelect }: {
-  network: Network;
-  ops: Ops | null;
-  views: Map<string, FacilityView>;
-  onSystem: (systemId: string) => void;
-  onFacility: (facilityId: string) => void;
-  onSelect: (e: DetectedEvent) => void;
-}) {
-  const cards = network.systems.map((sys) => {
-    const facilities: FacilityView[] = sys.facilities.flatMap((f) => views.get(f.id) ?? []);
-    const events: DetectedEvent[] = facilities.flatMap((v) => v.events);
-    const leaks: number = facilities.filter((v) => v.leak).length;
-    const worst: number = Math.max(0, ...facilities.map((v) => STATUS_RANK[v.status]), leaks ? 2.5 : 0);
-    const fleet: number = ops?.systems[sys.id]?.emergency_fleet_size ?? 0;
-    const out: number = facilities.reduce((n, v) => n + (v.plan?.plan_mode === "joint_now" ? v.plan.plan.trucks : 0), 0);
-    return { sys, facilities, events, worst, fleet, out };
-  });
-  cards.sort((a, b) => b.worst - a.worst || b.events.length - a.events.length || a.sys.id.localeCompare(b.sys.id));
-  return (
-    <section className="summary">
-      <h2>Network</h2>
-      <p className="muted">Open a system map or a facility.</p>
-      {cards.map(({ sys, facilities, events, fleet, out }) => (
-        <div key={sys.id} className={`system-card ${events.length ? "has-alerts" : ""}`}>
-          <button className="system-card-head" onClick={() => onSystem(sys.id)}>
-            <span className="system-card-name">{sys.id}</span>
-            <span className="muted">
-              {events.length ? `${events.length} in progress` : "all normal"} · trucks {fleet - out}/{fleet} free
-            </span>
-          </button>
-          <div className="system-card-facilities">
-            {facilities.map((v) => (
-              <button
-                key={v.facility.id}
-                className={`fac-pill status-${v.status} ${v.leak ? "leak" : ""}`}
-                title={`${STATUS_LABEL[v.status]}${v.leak ? " · leak" : ""}`}
-                onClick={() => onFacility(v.facility.id)}
-              >
-                {shortName(v.facility.id).replace("FACILITY ", "")}
-              </button>
-            ))}
-          </div>
-          {events.map((e) => (
-            <button key={eventKey(e)} className="system-card-event" onClick={() => onSelect(e)}>
-              {CATEGORY_LABEL[e.category]} · {e.asset_id}
-              {e.planning && !e.planning.tripped && e.planning.trips_at_unix !== null && ` · shutdown in ${e.planning.hours_to_limit.p50.toFixed(1)} h`}
-              {e.planning?.tripped && " · shut in"}
-            </button>
-          ))}
-        </div>
-      ))}
-    </section>
   );
 }

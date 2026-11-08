@@ -37,6 +37,9 @@ WEAR_CUSUM_H: float = 6.0
 # A leak starts with a ~16 psi step: one pump-on reading this many sigma below healthy alarms
 # without waiting for the CUSUM to accumulate.
 LEAK_SPIKE_Z: float = 4.5
+# Two stages per leak or worn pump: "suspected" when the fast rule above fires (spike, or the
+# lower wear threshold), "confirmed" once the same CUSUM reaches the standard CUSUM_H. The gap is
+# how much sooner the fast rule raised the alarm.
 # Consecutive healthy pump-on samples needed to declare a leak or worn pump over.
 CLEAR_RUN: int = 6
 # How many recent pump-on samples to average for the evidence text.
@@ -47,6 +50,7 @@ EVIDENCE_SAMPLES: int = 12
 class Span:
     start: int  # row index of the first anomalous sample
     alarm: int  # row index where the CUSUM crossed its threshold: the earliest an operator could know
+    confirm: int | None  # row index where the CUSUM first passed confirm_h; None if it never did
     end: int | None  # row index of the first healthy sample after it; None while ongoing
     peak: float  # highest CUSUM value reached, in sigma units
 
@@ -57,7 +61,8 @@ class Event:
     facility: Facility
     asset_id: str
     onset_unix: int
-    alarm_unix: int  # when the detector first fired; onset is back-dated from here
+    alarm_unix: int  # when the detector first fired (suspected); onset is back-dated from here
+    confirmed_unix: int | None  # when the evidence reached the standard threshold; None: not (yet)
     end_unix: int | None
     confidence: float
     evidence: list[str]
@@ -81,6 +86,7 @@ class Event:
             "onset_ts": iso(self.onset_unix),
             "onset_unix": self.onset_unix,
             "alarm_unix": self.alarm_unix,
+            "confirmed_unix": self.confirmed_unix,
             "end_ts": None if self.end_unix is None else iso(self.end_unix),
             "end_unix": self.end_unix,
             "confidence": round(self.confidence, 2),
@@ -116,6 +122,7 @@ def cusum_spans(
     breaks: np.ndarray,
     h: float = CUSUM_H,
     spike: float = np.inf,
+    confirm_h: float = CUSUM_H,
 ) -> list[Span]:
     """One-sided CUSUM over observable rows.
 
@@ -123,6 +130,7 @@ def cusum_spans(
     observable: rows where z means something (pump running); others are skipped.
     breaks: rows that force-close any open span (e.g. a degrading pump that then faults).
     h: alarm threshold on the sum. spike: a single z above this alarms too.
+    confirm_h: the sum at which an open span counts as confirmed (>= h).
     Onset is back-dated to the row where the sum last left zero.
     """
     spans: list[Span] = []
@@ -131,13 +139,14 @@ def cusum_spans(
     active: bool = False
     start: int = 0
     alarm: int = 0
+    confirm: int | None = None
     peak: float = 0.0
     healthy: int = 0
     healthy_from: int = 0
     for i in range(len(z)):
         if breaks[i]:
             if active:
-                spans.append(Span(start, alarm, i, peak))
+                spans.append(Span(start, alarm, confirm, i, peak))
             active, s, rise_from = False, 0.0, None
             continue
         if not observable[i]:
@@ -150,19 +159,22 @@ def cusum_spans(
                 rise_from = i
             if s > h or z[i] > spike:
                 active, start, alarm, peak, healthy = True, rise_from if rise_from is not None else i, i, s, 0
+                confirm = i if s > confirm_h else None
             continue
         peak = max(peak, s)
+        if confirm is None and s > confirm_h:
+            confirm = i
         if z[i] < CUSUM_K:
             if healthy == 0:
                 healthy_from = i
             healthy += 1
             if healthy >= CLEAR_RUN:
-                spans.append(Span(start, alarm, healthy_from, peak))
+                spans.append(Span(start, alarm, confirm, healthy_from, peak))
                 active, s, rise_from = False, 0.0, None
         else:
             healthy = 0
     if active:
-        spans.append(Span(start, alarm, None, peak))
+        spans.append(Span(start, alarm, confirm, None, peak))
     return spans
 
 
@@ -195,6 +207,7 @@ def detect_pump_failures(ds: Dataset, fac: Facility) -> list[Event]:
                 asset_id=fac.pump_id,
                 onset_unix=int(ds.ts[start]),
                 alarm_unix=int(ds.ts[start]),
+                confirmed_unix=int(ds.ts[start]),  # the pump reports the fault itself
                 end_unix=None if end is None else int(ds.ts[end]),
                 confidence=1.0,
                 evidence=evidence,
@@ -226,6 +239,7 @@ def detect_leaks(ds: Dataset, fac: Facility) -> list[Event]:
                 asset_id=fac.pipeline_id,
                 onset_unix=int(ds.ts[span.start]),
                 alarm_unix=int(ds.ts[span.alarm]),
+                confirmed_unix=None if span.confirm is None else int(ds.ts[span.confirm]),
                 end_unix=None if span.end is None else int(ds.ts[span.end]),
                 confidence=span_confidence(span),
                 evidence=evidence,
@@ -265,6 +279,7 @@ def detect_degradation(ds: Dataset, fac: Facility) -> list[Event]:
                 asset_id=fac.pump_id,
                 onset_unix=int(ds.ts[span.start]),
                 alarm_unix=int(ds.ts[span.alarm]),
+                confirmed_unix=None if span.confirm is None else int(ds.ts[span.confirm]),
                 end_unix=None if span.end is None else int(ds.ts[span.end]),
                 confidence=span_confidence(span, WEAR_CUSUM_H),
                 evidence=evidence,
