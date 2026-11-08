@@ -1,0 +1,12 @@
+[project]
+name = "beat-the-shutdown"
+version = "0.1.0"
+description = "Backend for the Beat the Shutdown operator console"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pandas",
+    "numpy",
+    "python-multipart>=0.0.33",
+]

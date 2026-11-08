@@ -1,0 +1,3 @@
+[submodule "HackUTD-ZeroDay"]
+	path = HackUTD-ZeroDay
+	url = https://github.com/nihaal419/HackUTD-ZeroDay.git
