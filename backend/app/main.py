@@ -23,6 +23,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.dataset import Dataset, parse_dataset, truncate
 from app.detect import Event, detect, iso
@@ -65,8 +66,12 @@ async def upload_dataset(
         _datasets[dataset_id] = ds
         while len(_datasets) > MAX_DATASETS:
             _datasets.popitem(last=False)
+    return {"dataset_id": dataset_id, **time_range(ds)}
+
+
+def time_range(ds: Dataset) -> dict[str, Any]:
     step: int = int(ds.ts[1] - ds.ts[0]) if len(ds.ts) > 1 else 300
-    return {"dataset_id": dataset_id, "name": name, "start_unix": int(ds.ts[0]), "end_unix": ds.now_unix, "step_s": step}
+    return {"name": ds.name, "start_unix": int(ds.ts[0]), "end_unix": ds.now_unix, "step_s": step}
 
 
 @app.get("/api/datasets/{dataset_id}/state")
@@ -96,6 +101,47 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
         "events": [e.to_json() for e in events],
         "early_fix": fix.to_json(plans),
     }
+
+
+class LivePosition(BaseModel):
+    dataset_id: str
+    now: int
+    early: bool = True
+
+
+# What the presenter's console is showing, for phones on /live. One slot: whoever publishes last
+# is the presenter. Kept apart from the dataset so a re-upload or eviction is noticed on read.
+_live: LivePosition | None = None
+
+
+@app.get("/api/live")
+def get_live() -> dict[str, Any]:
+    """The presenter's dataset and replay position; null when nothing is published or the dataset is gone."""
+    with _lock:
+        pos: LivePosition | None = _live
+        ds: Dataset | None = _datasets.get(pos.dataset_id) if pos else None
+    if pos is None or ds is None:
+        return {"live": None}
+    return {"live": {"dataset_id": pos.dataset_id, **time_range(ds), "now": pos.now, "early": pos.early}}
+
+
+@app.post("/api/live")
+def publish_live(pos: LivePosition) -> dict[str, Any]:
+    """Presenter: publish the dataset and replay position (sent on every change)."""
+    global _live
+    stored(pos.dataset_id)  # 404 for an unknown dataset, so viewers never follow a dangling id
+    with _lock:
+        _live = pos
+    return {"ok": True}
+
+
+@app.delete("/api/live")
+def clear_live() -> dict[str, Any]:
+    """Presenter: stop publishing; viewers go back to waiting."""
+    global _live
+    with _lock:
+        _live = None
+    return {"ok": True}
 
 
 @app.get("/api/health")
