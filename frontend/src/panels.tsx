@@ -5,6 +5,7 @@ import {
   eventKey,
   type Category,
   type DetectedEvent,
+  type EarlyFix,
   type EventsResponse,
   type Planning,
 } from "./api";
@@ -240,5 +241,42 @@ export function AlertList({ state, selectedKey, onSelect }: {
       <h2>Resolved ({resolved.length})</h2>
       <ul>{resolved.map(row)}</ul>
     </>
+  );
+}
+
+/** Left panel, what-if only: what fixing every early flag at once would have changed by "now". */
+export function WhatIfSummary({ fix }: { fix: EarlyFix }) {
+  const saved: number = fix.cost_recorded - fix.cost_early_fix;
+  const bbl: number = fix.leaks.reduce((sum, l) => sum + l.bbl_saved, 0);
+  const day = (unix: number): string => new Date(unix * 1000).toISOString().slice(5, 16).replace("T", " ");
+  return (
+    <section className="whatif">
+      <h2>What-if: fix at first flag</h2>
+      <p className="muted">
+        Each leak and worn pump is fixed the moment it is first flagged, using only what was known then (repairs are free:
+        ops.json prices none). A fault that ends a wear span is treated as caused by it. Remaining failures are re-planned;
+        map and chart readings stay as recorded.
+      </p>
+      <dl>
+        <dt>Response cost</dt>
+        <dd>
+          {money(fix.cost_recorded)} → {money(fix.cost_early_fix)}
+          {saved > 0 && <strong> · saves {money(saved)}</strong>}
+        </dd>
+        <dt>Failures prevented</dt>
+        <dd>{fix.prevented.length}</dd>
+        <dt>Leaked water avoided</dt>
+        <dd>{Math.round(bbl).toLocaleString("en-US")} bbl</dd>
+      </dl>
+      {fix.prevented.length > 0 && (
+        <ul>
+          {fix.prevented.map((p) => (
+            <li key={p.failure_id}>
+              {p.asset_id}: fixed {day(p.fixed_unix)}, {hoursText(p.lead_hours)} before it faulted · {money(p.cost_avoided)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

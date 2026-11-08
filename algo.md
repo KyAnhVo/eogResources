@@ -18,6 +18,7 @@ backend/                     FastAPI + uv, Python ≥ 3.12
   app/dataset.py             parse the 3 files into a time × series frame + facility index
   app/detect.py              the three detectors (task 1)
   app/plan.py                countdown, truck/shut-in planner, alert order, simulator (task 2)
+  app/whatif.py              what-if: every leak and worn pump fixed when first flagged, failures re-planned
   app/main.py                HTTP API: upload a dataset once, then ask for its state at any "now"
   app/score.py               scoring harness (reads answer keys; the app never does)
 frontend/                    Vite + React + TypeScript
@@ -360,6 +361,18 @@ TOTAL matched 72  missed 0  false positives 0  plans matching key 36/36
 - **The rules match the answer key, so some cheaper plans are excluded:** trucks with different trip counts, re-dispatching a truck once it's free, and delay-only plans. Each could be added as a labelled alternative.
 - **Shut-in starts are rounded down to whole minutes,** so plans err on the safe side by under a minute of revenue.
 
+## What-if: fix at first flag (`whatif.py`)
+
+The second timeline. Same telemetry, but every leak and worn pump is fixed at its `alarm_unix` (the "suspected" stage), for free, since ops.json prices no repair.
+
+- **No hindsight.** The fix is decided at the alarm with only the readings up to it. The detectors are causal, so the alarm is the same on any cut, and the what-if at a snapshot equals the full week's what-if up to that moment.
+- **One modelling assumption, about consequences only:** a fault that ends a wear span on the same pump (the wear's `end_unix` equals the fault's onset, and the wear was flagged first) was caused by that wear. Fixing the wear removes that failure. Every other fault happens as recorded.
+- **Re-planning:** the remaining failures go back through `plan_failures` unchanged, so trucks a prevented failure would have tied up are free for later ones.
+- **Leaks:** no $ cost in the files. The what-if reports barrels not lost instead: recorded `flow_bpd − receive_flow_bpd`, summed from the alarm to the recorded end.
+- **Readings are not rewritten.** Tank levels and pump status on the map and charts stay as recorded.
+
+full_week: 3 failures prevented (S1_PUMP_C, S3_PUMP_A, S4_PUMP_C, each fixed 33–34 h before it faulted). Plan cost goes from $15,308 to $11,688 (−$3,620). No knock-on truck savings this week: no prevented failure overlaps a later failure in the same system. Leaked water avoided: 566 bbl over 5 leaks.
+
 # Interfaces
 
 ## API
@@ -367,7 +380,7 @@ TOTAL matched 72  missed 0  false positives 0  plans matching key 36/36
 | Endpoint | Returns |
 |---|---|
 | `POST /api/datasets` (multipart: files `network`, `ops`, `telemetry`; field `name`) | `{dataset_id, name, start_unix, end_unix, step_s}`, or 400 with a message on malformed files |
-| `GET /api/datasets/{dataset_id}/state?now=` | `{dataset, start_unix, now_unix, now_ts, alert_order[], events[]}` as known at `now` (default: the last reading); 404 if the id is unknown, 400 if `now` is before the first reading |
+| `GET /api/datasets/{dataset_id}/state?now=` | `{dataset, start_unix, now_unix, now_ts, alert_order[], events[], early_fix}` as known at `now` (default: the last reading); 404 if the id is unknown, 400 if `now` is before the first reading |
 
 Each event follows the SPEC.md `events.json` shape: `event_id` (EV-0001… in onset order), `system_id`, `facility_id`, `asset_id`, `category`, `status`, `onset_ts/unix`, `end_ts/unix`, `alarm_unix` (when the detector first fired, i.e. suspected; onset is back-dated from it), `confirmed_unix` (when the same CUSUM first passed `CUSUM_H`; equals `alarm_unix` for pump faults, null if not reached), `confidence`, `evidence[]`, `hours_to_limit` (ongoing pump failures only), `recommended_actions[]`. Leaks and worn pumps carry `field_inspection`. Pump failures carry their plan as `dispatch_truck` / `shut_in_wells` actions, or `none`. They also carry `planning`:
 - `plan_mode`, `planned_at_unix`, `level_pct`
@@ -378,6 +391,8 @@ Each event follows the SPEC.md `events.json` shape: `event_id` (EV-0001… in on
 - `alternatives[]`
 
 `alert_order` lists the ongoing event IDs in alerts-view order.
+
+`early_fix` is the what-if at the same `now`: `alert_order[]` and `events[]` in the same shapes (same event IDs; fixed events end at their alarm, prevented failures are gone, failures re-planned), `prevented[]` (`failure_id`, `asset_id`, `wear_id`, `fixed_unix`, `failure_unix`, `lead_hours`, `cost_avoided`), `leaks[]` (`event_id`, `bbl_saved`), and `cost_recorded` / `cost_early_fix` (sum of plan costs).
 
 ## Frontend: the console
 
@@ -456,4 +471,5 @@ A third map level under a system tab (Overview › S4 › FACILITY A). It replac
 - **Early-warning link (`early.ts`).** The wear detector stops at the fault row (fault is a CUSUM break), so a wear event whose `end_unix` equals the same pump's failure `onset_unix` is that failure's warning, and lead = failure onset − wear alarm. The left list links only events known at "now". The timeline links over the whole recording. In full_week, 3 of 5 wear alarms preceded a failure, 33–34 h ahead (S1_PUMP_C, S3_PUMP_A, S4_PUMP_C); S2_PUMP_A and S5_PUMP_A ended without one.
 - **No right panel.** Navigation is the system tabs (with alert counts and the soonest countdown), the maps, and the alert list. Trucks free are on each system's yard node on the map.
 - **Action strip, alert selected:** a single row between the tabs and the map or facility page, with a left border coloured by category. It shows what to do and by when: the alert, the countdown (pump failures), "Action required" with the recommended action, "Open facility →" when that page isn't already open, and × to deselect (also Esc, or a click on empty map). Evidence, plan details and the options table are on the facility page. A timeline bar not yet known at "now" gets the same strip, with "Jump to detection".
+- **Scenario toggle (timeline):** "As recorded" / "Fix at first flag". The what-if swaps in `early_fix`'s events everywhere: alerts, map status, facility page, timeline lanes. A failure it prevented stays on the timeline as a dashed ghost bar. The left panel gains a summary box with the cost before and after, failures prevented and barrels not leaked.
 - **Telemetry for the map and charts** comes from the whole CSV, parsed once in the browser (23 MB, about 393k rows).

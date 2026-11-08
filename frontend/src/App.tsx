@@ -3,6 +3,7 @@ import {
   datasetFromFolder,
   eventKey,
   fetchState,
+  inScenario,
   uploadDataset,
   type DatasetFiles,
   type DatasetInfo,
@@ -10,11 +11,12 @@ import {
   type EventsResponse,
   type Network,
   type Ops,
+  type Scenario,
 } from "./api";
 import { computeLayout, computeSystemLayout, type Layout } from "./layout";
 import { MapView, OVERVIEW } from "./MapView";
 import { FacilityPage, SUMMARY, type ComponentId } from "./FacilityPage";
-import { ActionBar, AlertList, PendingBar } from "./panels";
+import { ActionBar, AlertList, PendingBar, WhatIfSummary } from "./panels";
 import { facilityViews, type FacilityView } from "./status";
 import { parseTelemetry, type Telemetry } from "./telemetry";
 import { SystemTabs } from "./SystemTabs";
@@ -60,6 +62,7 @@ export default function App() {
   const [facility, setFacility] = useState<string | null>(null); // facility page open inside the system tab
   const [component, setComponent] = useState<ComponentId>(SUMMARY);
   const [error, setError] = useState<string | null>(null);
+  const [scenario, setScenario] = useState<Scenario>("recorded");
   const loadCount = useRef<number>(0); // results from a folder picked earlier are ignored
 
   function pickFolder(picked: FileList): void {
@@ -123,6 +126,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now, info]);
 
+  // What the console shows: the recording, or the early-fix what-if in the same shape.
+  const shown: EventsResponse | null = useMemo(() => state && inScenario(state, scenario), [state, scenario]);
+  const shownHistory: EventsResponse | null = useMemo(() => history && inScenario(history, scenario), [history, scenario]);
+
   const overviewLayout: Layout | null = useMemo(() => (network ? computeLayout(network) : null), [network]);
   const systemLayouts: Map<string, Layout> = useMemo(
     () => new Map(network ? network.systems.map((s) => [s.id, computeSystemLayout(network, s.id)]) : []),
@@ -130,14 +137,14 @@ export default function App() {
   );
   const layout: Layout | null = tab === OVERVIEW ? overviewLayout : (systemLayouts.get(tab) ?? overviewLayout);
   const views: Map<string, FacilityView> = useMemo(
-    () => (network ? facilityViews(network, state, telemetry, now) : new Map()),
-    [network, state, telemetry, now],
+    () => (network ? facilityViews(network, shown, telemetry, now) : new Map()),
+    [network, shown, telemetry, now],
   );
 
   const selectedEvent: DetectedEvent | undefined =
-    selection?.kind === "event" ? state?.events.find((e) => eventKey(e) === selection.key) : undefined;
+    selection?.kind === "event" ? shown?.events.find((e) => eventKey(e) === selection.key) : undefined;
   const pendingEvent: DetectedEvent | undefined =
-    selection?.kind === "event" && !selectedEvent ? history?.events.find((e) => eventKey(e) === selection.key) : undefined;
+    selection?.kind === "event" && !selectedEvent ? shownHistory?.events.find((e) => eventKey(e) === selection.key) : undefined;
   const selectedFacility: string | null = (selectedEvent ?? pendingEvent)?.facility_id ?? null;
 
   /** Tabs, timeline lanes and summary cards: a map level, so any open facility page closes. */
@@ -181,7 +188,7 @@ export default function App() {
 
   const facilityView: FacilityView | undefined = facility ? views.get(facility) : undefined;
 
-  const ready: boolean = Boolean(info && network && layout && state && history);
+  const ready: boolean = Boolean(info && network && layout && shown && shownHistory);
   return (
     <div className={`app ${ready ? "console" : ""}`}>
       <header>
@@ -192,9 +199,10 @@ export default function App() {
             <FolderPicker onPick={pickFolder} label="Change folder" />
           </>
         )}
-        {state && (
+        {shown && (
           <span className="now">
-            now {state.now_ts.slice(0, 16).replace("T", " ")} UTC · {state.alert_order.length} in progress
+            now {shown.now_ts.slice(0, 16).replace("T", " ")} UTC · {shown.alert_order.length} in progress
+            {scenario === "early_fix" && " · what-if"}
           </span>
         )}
       </header>
@@ -206,10 +214,11 @@ export default function App() {
         </section>
       )}
       {files && !ready && !error && <p className="muted">Loading {files.name}…</p>}
-      {ready && info && network && layout && state && history && (
+      {ready && info && network && layout && state && shown && history && shownHistory && (
         <>
           <nav className="panel left">
-            <AlertList state={state} selectedKey={selection?.kind === "event" ? selection.key : null} onSelect={selectEvent} />
+            {scenario === "early_fix" && <WhatIfSummary fix={state.early_fix} />}
+            <AlertList state={shown} selectedKey={selection?.kind === "event" ? selection.key : null} onSelect={selectEvent} />
           </nav>
           <div className="map-area">
             <SystemTabs network={network} views={views} active={tab} onSelect={openTab} />
@@ -234,7 +243,7 @@ export default function App() {
                 view={facilityView}
                 network={network}
                 telemetry={telemetry}
-                events={state.events.filter((e) => e.facility_id === facilityView.facility.id)}
+                events={shown.events.filter((e) => e.facility_id === facilityView.facility.id)}
                 selected={selectedEvent?.facility_id === facilityView.facility.id ? selectedEvent : undefined}
                 now={now}
                 start={info.start_unix}
@@ -264,7 +273,11 @@ export default function App() {
             step={info.step_s}
             now={now}
             onNow={setNow}
-            history={history.events}
+            recorded={history.events}
+            whatIf={history.early_fix.events}
+            whatIfSaved={history.early_fix.cost_recorded - history.early_fix.cost_early_fix}
+            scenario={scenario}
+            onScenario={setScenario}
             systems={network.systems.map((s) => s.id)}
             selectedKey={selection?.kind === "event" ? selection.key : null}
             onSelectEvent={selectEvent}

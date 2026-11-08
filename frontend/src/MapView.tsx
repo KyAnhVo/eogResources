@@ -16,7 +16,9 @@ import {
   type Edge,
   type EdgeProps,
   type EdgeTypes,
+  type Dimensions,
   type Node,
+  type NodeChange,
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
@@ -242,6 +244,10 @@ interface Props {
 function MapCanvas(props: Props) {
   const { network, ops, layout, views, telemetry, now, scope, selectedFacility } = props;
   const [hover, setHover] = useState<HoverTarget | null>(null);
+  // React Flow takes `measured` from the nodes passed in, and these are rebuilt on every "now", so the
+  // sizes it reports are kept here and put back; without them each rebuild hides every node until it
+  // is re-measured, which never happens because the DOM size didn't change (blank map after replay).
+  const [sizes, setSizes] = useState<Map<string, Dimensions>>(new Map());
   const container = useRef<HTMLDivElement>(null);
   const overview: boolean = scope === OVERVIEW;
 
@@ -320,6 +326,12 @@ function MapCanvas(props: Props) {
     }
     return { nodes, edges };
   }, [network, ops, layout, views, telemetry, now, overview, scope, selectedFacility, shutdownPct, warningPct]);
+  const sized: Node[] = useMemo(() => nodes.map((n) => (sizes.has(n.id) ? { ...n, measured: sizes.get(n.id) } : n)), [nodes, sizes]);
+
+  function onNodesChange(changes: NodeChange[]): void {
+    const measured = changes.flatMap((c) => (c.type === "dimensions" && c.dimensions ? [[c.id, c.dimensions] as const] : []));
+    if (measured.length) setSizes((prev) => new Map([...prev, ...measured]));
+  }
 
   function track(kind: HoverTarget["kind"], id: string, e: ReactMouseEvent): void {
     const box: DOMRect | undefined = container.current?.getBoundingClientRect();
@@ -329,8 +341,9 @@ function MapCanvas(props: Props) {
   return (
     <div className="map" ref={container}>
       <ReactFlow
-        nodes={nodes}
+        nodes={sized}
         edges={edges}
+        onNodesChange={onNodesChange}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         nodeOrigin={[0.5, 0.5]}

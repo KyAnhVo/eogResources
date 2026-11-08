@@ -20,6 +20,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from app.dataset import Dataset, parse_dataset, truncate
 from app.detect import Event, detect, iso
 from app.plan import FailurePlan, alert_order, plan_failures
+from app.whatif import EarlyFix, early_fix
 
 app: FastAPI = FastAPI(title="Beat the Shutdown")
 
@@ -73,6 +74,10 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
     for event in events:
         if event.event_id in plans:
             event.planning = plans[event.event_id].to_json()
+    fix: EarlyFix = early_fix(ds, events)
+    for event in fix.events:
+        if event.event_id in fix.plans:
+            event.planning = fix.plans[event.event_id].to_json()
     return {
         "dataset": ds.name,
         "start_unix": int(ds.ts[0]),
@@ -80,4 +85,5 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
         "now_ts": iso(ds.now_unix),
         "alert_order": alert_order(events, plans),
         "events": [e.to_json() for e in events],
+        "early_fix": fix.to_json(plans),
     }

@@ -62,7 +62,33 @@ export interface EventsResponse {
   now_ts: string;
   alert_order: string[]; // ongoing event IDs in alerts-view order
   events: DetectedEvent[];
+  early_fix: EarlyFix;
 }
+
+// Mirrors backend/app/whatif.py EarlyFix.to_json: the same "now" if every leak and worn pump had been
+// fixed when first flagged. Event keys match the recorded events.
+export interface EarlyFix {
+  alert_order: string[];
+  events: DetectedEvent[];
+  prevented: {
+    failure_id: string;
+    asset_id: string;
+    wear_id: string;
+    fixed_unix: number;
+    failure_unix: number;
+    lead_hours: number;
+    cost_avoided: number; // the recorded failure's plan cost
+  }[];
+  leaks: { event_id: string; bbl_saved: number }[];
+  cost_recorded: number; // every failure plan's cost, as recorded
+  cost_early_fix: number; // the same after re-planning without the prevented failures
+}
+
+export type Scenario = "recorded" | "early_fix";
+
+/** The state as the UI shows it: as recorded, or the early-fix what-if in the same shape. */
+export const inScenario = (s: EventsResponse, scenario: Scenario): EventsResponse =>
+  scenario === "recorded" ? s : { ...s, events: s.early_fix.events, alert_order: s.early_fix.alert_order };
 
 export interface NetworkWell {
   id: string;

@@ -3,11 +3,14 @@
 // moments are easy to find; the part after "now" is dimmed because the app at "now" can't know it.
 // Clicking a bar jumps to the moment that event was first detected and selects it. A lane on top
 // shows early warnings: each worn-pump alarm, spanning to the failure it preceded. A hollow ring on
-// a leak or wear bar marks where the fast rule raised the alarm ahead of confirmation.
+// a leak or wear bar marks where the fast rule raised the alarm ahead of confirmation. The system
+// lanes come twice, stacked on one track: as recorded, then the early-fix what-if, where each failure it
+// prevented stays as a dashed ghost. The active stack (toggle, or a click on its header) drives the console.
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { eventKey, type DetectedEvent } from "./api";
+import { eventKey, type DetectedEvent, type Scenario } from "./api";
 import { earlyWarnings, hoursText, soonerMinutes, type Warning } from "./early";
+import { money } from "./status";
 
 interface Props {
   start: number;
@@ -15,7 +18,11 @@ interface Props {
   step: number; // seconds between telemetry rows
   now: number;
   onNow: (t: number) => void;
-  history: DetectedEvent[]; // events detected over the whole recording
+  recorded: DetectedEvent[]; // events detected over the whole recording
+  whatIf: DetectedEvent[]; // the same with every early flag fixed (backend early_fix)
+  whatIfSaved: number; // plan cost the what-if saves over the whole recording
+  scenario: Scenario; // which stack drives the rest of the console
+  onScenario: (s: Scenario) => void;
   systems: string[];
   selectedKey: string | null;
   onSelectEvent: (e: DetectedEvent) => void;
@@ -32,6 +39,7 @@ const SPEEDS: { label: string; hoursPerSecond: number }[] = [
 const TICK_MS = 100;
 const ROW_H = 7;
 const WARN_ROW_H = 15;
+const STACK_H = 14;
 const DAY = 86400;
 
 /** Greedy interval packing so overlapping spans get their own sub-row. */
@@ -60,7 +68,9 @@ const label = (unix: number): string => {
   return `${d.toUTCString().slice(0, 3)} ${d.toISOString().slice(5, 10)}`;
 };
 
-export function Timeline({ start, end, step, now, onNow, history, systems, selectedKey, onSelectEvent, activeSystem, onSelectSystem, busy }: Props) {
+export function Timeline({
+  start, end, step, now, onNow, recorded, whatIf, whatIfSaved, scenario, onScenario, systems, selectedKey, onSelectEvent, activeSystem, onSelectSystem, busy,
+}: Props) {
   const [playing, setPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(1);
   const track = useRef<HTMLDivElement>(null);
@@ -95,18 +105,32 @@ export function Timeline({ start, end, step, now, onNow, history, systems, selec
     e.preventDefault();
   }
 
-  const lanes = systems.map((sys) => {
-    const events: DetectedEvent[] = history.filter((e) => e.system_id === sys);
-    const rows: Map<string, number> = packRows(events, end);
-    const rowCount: number = Math.max(1, ...[...rows.values()].map((r) => r + 1));
-    return { sys, events, rows, height: rowCount * ROW_H + 6 };
-  });
+  const lanesFor = (events: DetectedEvent[], ghosts: DetectedEvent[]) =>
+    systems.map((sys) => {
+      const own: DetectedEvent[] = events.filter((e) => e.system_id === sys);
+      const laneGhosts: DetectedEvent[] = ghosts.filter((e) => e.system_id === sys);
+      const rows: Map<string, number> = packRows([...own, ...laneGhosts], end);
+      const rowCount: number = Math.max(1, ...[...rows.values()].map((r) => r + 1));
+      return { sys, events: own, ghosts: laneGhosts, rows, height: rowCount * ROW_H + 6 };
+    });
+  // Recorded failures missing from the what-if: the ones an early fix prevented.
+  const whatIfKeys = new Set<string>(whatIf.map(eventKey));
+  const prevented: DetectedEvent[] = recorded.filter((e) => e.category === "pump_failure" && !whatIfKeys.has(eventKey(e)));
+  const stacks: { scenario: Scenario; title: string; lanes: ReturnType<typeof lanesFor> }[] = [
+    { scenario: "recorded", title: "As recorded", lanes: lanesFor(recorded, []) },
+    {
+      scenario: "early_fix",
+      title: `Fix at first flag${prevented.length ? ` · ${prevented.length} failure${prevented.length > 1 ? "s" : ""} prevented` : ""}${whatIfSaved > 0 ? ` · saves ${money(whatIfSaved)}` : ""}`,
+      lanes: lanesFor(whatIf, prevented),
+    },
+  ];
 
-  const warnings: Warning[] = earlyWarnings(history);
+  const warnings: Warning[] = earlyWarnings(recorded);
   const warnRows: Map<string, number> = pack(warnings, (w) => w.wear.alarm_unix, (w) => warnEnd(w, end), (w) => eventKey(w.wear));
   const warnHeight: number = Math.max(1, ...[...warnRows.values()].map((r) => r + 1)) * WARN_ROW_H + 4;
-  const pick = (e: DetectedEvent): void => {
+  const pick = (e: DetectedEvent, from: Scenario = "recorded"): void => {
     setPlaying(false);
+    onScenario(from);
     onNow(clamp(e.alarm_unix));
     onSelectEvent(e);
   };
@@ -135,23 +159,42 @@ export function Timeline({ start, end, step, now, onNow, history, systems, selec
         <button onClick={() => onNow(clamp(now + step))} title="Forward one reading">+5m</button>
         <button onClick={() => onNow(clamp(now + 3600))} title="Forward 1 hour">+1h</button>
         <button onClick={() => onNow(end)} disabled={now === end} title="Jump to the last reading">Latest</button>
+        <div className="scenario-toggle" role="group" aria-label="Scenario">
+          <button
+            className={scenario === "recorded" ? "active" : ""}
+            onClick={() => onScenario("recorded")}
+            title="What happened: problems are handled when they hit (failures get trucks or shut-ins)"
+          >
+            As recorded
+          </button>
+          <button
+            className={scenario === "early_fix" ? "active" : ""}
+            onClick={() => onScenario("early_fix")}
+            title="What-if: every leak and worn pump is fixed the moment it is first flagged, using only what was known then"
+          >
+            Fix at first flag
+          </button>
+        </div>
       </div>
       <div className="timeline-body">
         <div className="lane-labels">
           <span className="lane-label warn-label" style={{ height: warnHeight + 1 }} title="Early warnings: worn-pump alarms and the failure each preceded">
             ⚑
           </span>
-          {lanes.map((l) => (
-            <button
-              key={l.sys}
-              className={`lane-label ${l.sys === activeSystem ? "active" : ""}`}
-              style={{ height: l.height + 1 }}
-              onClick={() => onSelectSystem(l.sys)}
-              title={`Open the ${l.sys} tab`}
-            >
-              {l.sys}
-            </button>
-          ))}
+          {stacks.map((st) => [
+            <span key={`${st.scenario}-head`} className="lane-label" style={{ height: STACK_H + 1 }} />,
+            ...st.lanes.map((l) => (
+              <button
+                key={`${st.scenario}-${l.sys}`}
+                className={`lane-label ${l.sys === activeSystem ? "active" : ""}`}
+                style={{ height: l.height + 1 }}
+                onClick={() => onSelectSystem(l.sys)}
+                title={`Open the ${l.sys} tab`}
+              >
+                {l.sys}
+              </button>
+            )),
+          ])}
         </div>
         <div
           className="track"
@@ -197,9 +240,32 @@ export function Timeline({ start, end, step, now, onNow, history, systems, selec
               );
             })}
           </div>
-          {lanes.map(({ sys, events, rows, height }) => {
-            return (
-              <div key={sys} className={`lane ${sys === activeSystem ? "active" : ""}`} style={{ height }}>
+          {stacks.map((st) => [
+            <div
+              key={`${st.scenario}-head`}
+              className={`stack-head ${st.scenario} ${st.scenario === scenario ? "active" : ""}`}
+              style={{ height: STACK_H }}
+              onPointerDown={(ev) => ev.stopPropagation()}
+              onClick={() => onScenario(st.scenario)}
+              title={st.scenario === scenario ? "Shown in the console" : "Show this scenario in the console"}
+            >
+              {st.title}
+            </div>,
+            ...st.lanes.map(({ sys, events, ghosts: laneGhosts, rows, height }) => (
+              <div key={`${st.scenario}-${sys}`} className={`lane ${sys === activeSystem ? "active" : ""}`} style={{ height }}>
+                {laneGhosts.map((e) => (
+                  <div
+                    key={eventKey(e)}
+                    className="bar ghost"
+                    style={{
+                      left: `${pct(e.onset_unix)}%`,
+                      width: `max(3px, ${pct(e.end_unix ?? end) - pct(e.onset_unix)}%)`,
+                      top: 3 + (rows.get(eventKey(e)) ?? 0) * ROW_H,
+                    }}
+                    title={`${e.asset_id} · pump failure ${stamp(e.onset_unix)} prevented: its wear was fixed when first flagged`}
+                    onPointerDown={(ev) => ev.stopPropagation()}
+                  />
+                ))}
                 {events.map((e) => {
                   const key: string = eventKey(e);
                   const sooner: number | null = soonerMinutes(e);
@@ -227,13 +293,13 @@ export function Timeline({ start, end, step, now, onNow, history, systems, selec
                       }}
                       title={`${e.asset_id} · ${e.category.replace("_", " ")} · ${early ? "suspected" : "detected"} ${stamp(e.alarm_unix)}${stage}`}
                       onPointerDown={(ev) => ev.stopPropagation()}
-                      onClick={() => pick(e)}
+                      onClick={() => pick(e, st.scenario)}
                     />,
                   ];
                 })}
               </div>
-            );
-          })}
+            )),
+          ])}
           <div className="future" style={{ left: `${pct(now)}%` }} />
           <div className="playhead" style={{ left: `${pct(now)}%` }} />
         </div>
