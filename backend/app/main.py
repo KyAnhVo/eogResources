@@ -7,32 +7,34 @@ detection and plans from the telemetry up to `now`.
 
     uv run uvicorn app.main:app --port 8000
 
-Hosted (`make serve`), the same server also serves the built frontend (frontend/dist), and a presenter's
-console publishes its dataset and replay position to /api/live so phones on /live can follow it.
+When the built console exists (frontend/dist, or STATIC_DIR in the Docker image) it is served from
+the same origin, so the deployed site needs no proxy; under `make demo` Vite serves it instead. A
+presenter's console publishes its dataset and replay position to /api/live so phones on /live can follow it.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from collections import OrderedDict
-from typing import Annotated, Any
-
 from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
+from app import notify as crew
 from app.dataset import Dataset, parse_dataset, truncate
 from app.detect import Event, detect, iso
 from app.plan import FailurePlan, alert_order, plan_failures
 from app.whatif import EarlyFix, early_fix
-from app import notify as crew
-from pydantic import BaseModel
 
 app: FastAPI = FastAPI(title="Oilgorithm")
-app.add_middleware(GZipMiddleware, minimum_size=1000)  # state JSON compresses well; phones on mobile data
+# State JSON and the JS bundle shrink ~14x / ~3x; phones on /live pull /state every time the presenter moves.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Most recently used datasets, oldest first. A handful covers switching between folders in a demo.
 MAX_DATASETS: int = 4
@@ -66,8 +68,12 @@ async def upload_dataset(
         _datasets[dataset_id] = ds
         while len(_datasets) > MAX_DATASETS:
             _datasets.popitem(last=False)
+    return {"dataset_id": dataset_id, **time_range(ds)}
+
+
+def time_range(ds: Dataset) -> dict[str, Any]:
     step: int = int(ds.ts[1] - ds.ts[0]) if len(ds.ts) > 1 else 300
-    return {"dataset_id": dataset_id, "name": name, "start_unix": int(ds.ts[0]), "end_unix": ds.now_unix, "step_s": step}
+    return {"name": ds.name, "start_unix": int(ds.ts[0]), "end_unix": ds.now_unix, "step_s": step}
 
 
 @app.get("/api/datasets/{dataset_id}/state")
@@ -99,6 +105,8 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- crew notifications (placeholder sender)
+
 class NotifyRequest(BaseModel):
     event_id: str
     contact_ids: list[str]
@@ -129,62 +137,68 @@ def get_notifications() -> dict[str, Any]:
 
 # ---------------------------------------------------------------- live view: phones follow the presenter
 
-class LiveUpdate(BaseModel):
+class LivePosition(BaseModel):
     dataset_id: str
     now: int
     early: bool = True
 
 
-_live: dict[str, Any] | None = None  # the presenter's dataset and replay position
-
-
-@app.post("/api/live")
-def set_live(update: LiveUpdate) -> dict[str, Any]:
-    """The presenter's console reports its dataset and "now" as the replay moves."""
-    global _live
-    ds: Dataset = stored(update.dataset_id)
-    step: int = int(ds.ts[1] - ds.ts[0]) if len(ds.ts) > 1 else 300
-    live: dict[str, Any] = {
-        "dataset_id": update.dataset_id,
-        "name": ds.name,
-        "start_unix": int(ds.ts[0]),
-        "end_unix": ds.now_unix,
-        "step_s": step,
-        "now": update.now,
-        "early": update.early,
-    }
-    with _lock:
-        _live = live
-    return live
-
-
-@app.delete("/api/live")
-def clear_live() -> dict[str, Any]:
-    """The presenter went back to the main page: viewers wait for the next dataset."""
-    global _live
-    with _lock:
-        _live = None
-    return {"live": None}
+# What the presenter's console is showing, for phones on /live. One slot: whoever publishes last
+# is the presenter. Kept apart from the dataset so a re-upload or eviction is noticed on read.
+_live: LivePosition | None = None
 
 
 @app.get("/api/live")
 def get_live() -> dict[str, Any]:
+    """The presenter's dataset and replay position; null when nothing is published or the dataset is gone."""
     with _lock:
-        return {"live": _live}
+        pos: LivePosition | None = _live
+        ds: Dataset | None = _datasets.get(pos.dataset_id) if pos else None
+    if pos is None or ds is None:
+        return {"live": None}
+    return {"live": {"dataset_id": pos.dataset_id, **time_range(ds), "now": pos.now, "early": pos.early}}
+
+
+@app.post("/api/live")
+def publish_live(pos: LivePosition) -> dict[str, Any]:
+    """Presenter: publish the dataset and replay position (sent on every change)."""
+    global _live
+    stored(pos.dataset_id)  # 404 for an unknown dataset, so viewers never follow a dangling id
+    with _lock:
+        _live = pos
+    return {"ok": True}
+
+
+@app.delete("/api/live")
+def clear_live() -> dict[str, Any]:
+    """Presenter: stop publishing; viewers go back to waiting."""
+    global _live
+    with _lock:
+        _live = None
+    return {"ok": True}
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    """Liveness for the host's health check: the app imported and is serving."""
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------- built frontend (production)
 
-DIST: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+STATIC_DIR: Path = Path(
+    os.environ.get("STATIC_DIR", Path(__file__).resolve().parents[2] / "frontend" / "dist")
+).resolve()
 
+if (STATIC_DIR / "index.html").is_file():
+    # Registered last so every /api route wins. Unknown paths get index.html because the console
+    # picks its view from the URL (/live); unknown /api paths still 404 as JSON.
 
-@app.get("/{path:path}", include_in_schema=False)
-def frontend(path: str) -> FileResponse:
-    """Serve frontend/dist when it has been built (`make build`); any unknown path gets index.html so
-    client-side routes such as /live work. API routes are declared above, so they take precedence."""
-    if path.startswith("api/") or not (DIST / "index.html").is_file():
-        raise HTTPException(status_code=404, detail="not found")
-    target: Path = (DIST / path).resolve()
-    if path and target.is_file() and DIST in target.parents:
-        return FileResponse(target)
-    return FileResponse(DIST / "index.html")
+    @app.get("/{path:path}", include_in_schema=False)
+    def console(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file: Path = (STATIC_DIR / path).resolve()
+        if file.is_file() and file.is_relative_to(STATIC_DIR):
+            return FileResponse(file)
+        return FileResponse(STATIC_DIR / "index.html")

@@ -1,0 +1,11 @@
+.git
+.gitmodules
+.obsidian
+*.md
+data
+frontend/node_modules
+frontend/dist
+backend/.venv
+backend/research
+**/__pycache__
+**/*.pyc
