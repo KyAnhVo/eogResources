@@ -1,4 +1,4 @@
-.PHONY: install backend frontend demo score typecheck
+.PHONY: install backend frontend demo score typecheck build serve
 
 install:
 	cd backend && uv sync
@@ -20,3 +20,11 @@ score:
 
 typecheck:
 	cd frontend && npx tsc --noEmit
+
+# Production: build the frontend once, then one server on :8000 serves the app and the API.
+# Phones open http://<this computer>:8000/live (same Wi-Fi) or the tunnel / domain address.
+build:
+	cd frontend && npm run build
+
+serve: build
+	cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000

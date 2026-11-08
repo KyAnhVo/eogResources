@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from app.dataset import Dataset, Facility
+from app.verify import verify_wear
 
 PUMP_RUNNING: int = 1
 PUMP_FAULT: int = 2
@@ -68,6 +69,7 @@ class Event:
     evidence: list[str]
     event_id: str = ""
     planning: dict[str, Any] | None = None  # pump failures: countdown and plan, filled by app.plan
+    verification: dict[str, Any] | None = None  # worn pumps: trend check after the alarm (app.verify)
 
     def to_json(self) -> dict[str, Any]:
         actions: list[dict[str, Any]] = [{"type": "field_inspection", "asset_id": self.asset_id}]
@@ -94,6 +96,7 @@ class Event:
             "hours_to_limit": hours_to_limit,
             "recommended_actions": actions,
             "planning": self.planning,
+            "verification": self.verification,
         }
 
 
@@ -283,6 +286,15 @@ def detect_degradation(ds: Dataset, fac: Facility) -> list[Event]:
                 end_unix=None if span.end is None else int(ds.ts[span.end]),
                 confidence=span_confidence(span, WEAR_CUSUM_H),
                 evidence=evidence,
+                verification=verify_wear(
+                    ds,
+                    efficiency,
+                    discharge - (fac.disposal_psi + DISCHARGE_RUNNING_OFFSET_PSI),
+                    running,
+                    span.alarm,
+                    span.end,
+                    EFFICIENCY_SIGMA,
+                ),
             )
         )
     return events

@@ -6,6 +6,9 @@ moment (GET /api/datasets/{id}/state?now=) without re-uploading. Every state req
 detection and plans from the telemetry up to `now`.
 
     uv run uvicorn app.main:app --port 8000
+
+Hosted (`make serve`), the same server also serves the built frontend (frontend/dist), and a presenter's
+console publishes its dataset and replay position to /api/live so phones on /live can follow it.
 """
 
 from __future__ import annotations
@@ -15,14 +18,21 @@ import uuid
 from collections import OrderedDict
 from typing import Annotated, Any
 
+from pathlib import Path
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse
 
 from app.dataset import Dataset, parse_dataset, truncate
 from app.detect import Event, detect, iso
 from app.plan import FailurePlan, alert_order, plan_failures
 from app.whatif import EarlyFix, early_fix
+from app import notify as crew
+from pydantic import BaseModel
 
-app: FastAPI = FastAPI(title="Beat the Shutdown")
+app: FastAPI = FastAPI(title="Oilgorithm")
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # state JSON compresses well; phones on mobile data
 
 # Most recently used datasets, oldest first. A handful covers switching between folders in a demo.
 MAX_DATASETS: int = 4
@@ -87,3 +97,94 @@ def get_state(dataset_id: str, now: int | None = None) -> dict[str, Any]:
         "events": [e.to_json() for e in events],
         "early_fix": fix.to_json(plans),
     }
+
+
+class NotifyRequest(BaseModel):
+    event_id: str
+    contact_ids: list[str]
+    message: str
+
+
+@app.get("/api/contacts")
+def get_contacts() -> dict[str, Any]:
+    """The crew directory (placeholder data, see app/notify.py)."""
+    try:
+        return {"contacts": crew.load_contacts(), "placeholder": True}
+    except (OSError, ValueError, KeyError) as err:
+        raise HTTPException(status_code=500, detail=f"contacts file could not be read: {err}") from err
+
+
+@app.post("/api/notify")
+def post_notify(req: NotifyRequest) -> dict[str, Any]:
+    """Send a decision to crew members. Placeholder sender: nothing is delivered yet."""
+    if not req.contact_ids or not req.message.strip():
+        raise HTTPException(status_code=400, detail="choose at least one recipient and write a message")
+    return crew.notify(req.contact_ids, req.message.strip(), req.event_id)
+
+
+@app.get("/api/notifications")
+def get_notifications() -> dict[str, Any]:
+    return {"sent": crew.sent_log()}
+
+
+# ---------------------------------------------------------------- live view: phones follow the presenter
+
+class LiveUpdate(BaseModel):
+    dataset_id: str
+    now: int
+    early: bool = True
+
+
+_live: dict[str, Any] | None = None  # the presenter's dataset and replay position
+
+
+@app.post("/api/live")
+def set_live(update: LiveUpdate) -> dict[str, Any]:
+    """The presenter's console reports its dataset and "now" as the replay moves."""
+    global _live
+    ds: Dataset = stored(update.dataset_id)
+    step: int = int(ds.ts[1] - ds.ts[0]) if len(ds.ts) > 1 else 300
+    live: dict[str, Any] = {
+        "dataset_id": update.dataset_id,
+        "name": ds.name,
+        "start_unix": int(ds.ts[0]),
+        "end_unix": ds.now_unix,
+        "step_s": step,
+        "now": update.now,
+        "early": update.early,
+    }
+    with _lock:
+        _live = live
+    return live
+
+
+@app.delete("/api/live")
+def clear_live() -> dict[str, Any]:
+    """The presenter went back to the main page: viewers wait for the next dataset."""
+    global _live
+    with _lock:
+        _live = None
+    return {"live": None}
+
+
+@app.get("/api/live")
+def get_live() -> dict[str, Any]:
+    with _lock:
+        return {"live": _live}
+
+
+# ---------------------------------------------------------------- built frontend (production)
+
+DIST: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def frontend(path: str) -> FileResponse:
+    """Serve frontend/dist when it has been built (`make build`); any unknown path gets index.html so
+    client-side routes such as /live work. API routes are declared above, so they take precedence."""
+    if path.startswith("api/") or not (DIST / "index.html").is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    target: Path = (DIST / path).resolve()
+    if path and target.is_file() and DIST in target.parents:
+        return FileResponse(target)
+    return FileResponse(DIST / "index.html")

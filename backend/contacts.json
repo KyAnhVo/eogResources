@@ -1,0 +1,239 @@
+{
+  "_note": "PLACEHOLDER contacts: fictional names, example.com emails, and 11-digit phone numbers in the 555-0100..0199 block reserved for fiction (never assigned to anyone). Replace with the real crew list and keep real contact details out of git.",
+  "contacts": [
+    {
+      "id": "SUP-1",
+      "name": "Placeholder Supervisor",
+      "role": "supervisor",
+      "title": "Operations supervisor",
+      "system": null,
+      "phone": "+1 713 555 0100",
+      "email": "supervisor@example.com"
+    },
+    {
+      "id": "S1-DRI-1",
+      "name": "Alex (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S1",
+      "phone": "+1 713 555 0101",
+      "email": "driver1.s1@example.com"
+    },
+    {
+      "id": "S1-DRI-2",
+      "name": "Sam (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S1",
+      "phone": "+1 713 555 0102",
+      "email": "driver2.s1@example.com"
+    },
+    {
+      "id": "S1-INS-1",
+      "name": "Jordan (placeholder)",
+      "role": "inspector",
+      "title": "Pipeline inspector",
+      "system": "S1",
+      "phone": "+1 713 555 0103",
+      "email": "inspector1.s1@example.com"
+    },
+    {
+      "id": "S1-MAI-1",
+      "name": "Taylor (placeholder)",
+      "role": "maintenance",
+      "title": "Pump technician",
+      "system": "S1",
+      "phone": "+1 713 555 0104",
+      "email": "maintenance1.s1@example.com"
+    },
+    {
+      "id": "S1-OPE-1",
+      "name": "Casey (placeholder)",
+      "role": "operator",
+      "title": "Field operator",
+      "system": "S1",
+      "phone": "+1 713 555 0105",
+      "email": "operator1.s1@example.com"
+    },
+    {
+      "id": "S2-DRI-1",
+      "name": "Riley (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S2",
+      "phone": "+1 713 555 0106",
+      "email": "driver1.s2@example.com"
+    },
+    {
+      "id": "S2-DRI-2",
+      "name": "Morgan (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S2",
+      "phone": "+1 713 555 0107",
+      "email": "driver2.s2@example.com"
+    },
+    {
+      "id": "S2-INS-1",
+      "name": "Jamie (placeholder)",
+      "role": "inspector",
+      "title": "Pipeline inspector",
+      "system": "S2",
+      "phone": "+1 713 555 0108",
+      "email": "inspector1.s2@example.com"
+    },
+    {
+      "id": "S2-MAI-1",
+      "name": "Avery (placeholder)",
+      "role": "maintenance",
+      "title": "Pump technician",
+      "system": "S2",
+      "phone": "+1 713 555 0109",
+      "email": "maintenance1.s2@example.com"
+    },
+    {
+      "id": "S2-OPE-1",
+      "name": "Quinn (placeholder)",
+      "role": "operator",
+      "title": "Field operator",
+      "system": "S2",
+      "phone": "+1 713 555 0110",
+      "email": "operator1.s2@example.com"
+    },
+    {
+      "id": "S3-DRI-1",
+      "name": "Drew (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S3",
+      "phone": "+1 713 555 0111",
+      "email": "driver1.s3@example.com"
+    },
+    {
+      "id": "S3-DRI-2",
+      "name": "Reese (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S3",
+      "phone": "+1 713 555 0112",
+      "email": "driver2.s3@example.com"
+    },
+    {
+      "id": "S3-INS-1",
+      "name": "Parker (placeholder)",
+      "role": "inspector",
+      "title": "Pipeline inspector",
+      "system": "S3",
+      "phone": "+1 713 555 0113",
+      "email": "inspector1.s3@example.com"
+    },
+    {
+      "id": "S3-MAI-1",
+      "name": "Rowan (placeholder)",
+      "role": "maintenance",
+      "title": "Pump technician",
+      "system": "S3",
+      "phone": "+1 713 555 0114",
+      "email": "maintenance1.s3@example.com"
+    },
+    {
+      "id": "S3-OPE-1",
+      "name": "Skyler (placeholder)",
+      "role": "operator",
+      "title": "Field operator",
+      "system": "S3",
+      "phone": "+1 713 555 0115",
+      "email": "operator1.s3@example.com"
+    },
+    {
+      "id": "S4-DRI-1",
+      "name": "Emerson (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S4",
+      "phone": "+1 713 555 0116",
+      "email": "driver1.s4@example.com"
+    },
+    {
+      "id": "S4-DRI-2",
+      "name": "Hayden (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S4",
+      "phone": "+1 713 555 0117",
+      "email": "driver2.s4@example.com"
+    },
+    {
+      "id": "S4-INS-1",
+      "name": "Finley (placeholder)",
+      "role": "inspector",
+      "title": "Pipeline inspector",
+      "system": "S4",
+      "phone": "+1 713 555 0118",
+      "email": "inspector1.s4@example.com"
+    },
+    {
+      "id": "S4-MAI-1",
+      "name": "Sage (placeholder)",
+      "role": "maintenance",
+      "title": "Pump technician",
+      "system": "S4",
+      "phone": "+1 713 555 0119",
+      "email": "maintenance1.s4@example.com"
+    },
+    {
+      "id": "S4-OPE-1",
+      "name": "Blake (placeholder)",
+      "role": "operator",
+      "title": "Field operator",
+      "system": "S4",
+      "phone": "+1 713 555 0120",
+      "email": "operator1.s4@example.com"
+    },
+    {
+      "id": "S5-DRI-1",
+      "name": "Kendall (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S5",
+      "phone": "+1 713 555 0121",
+      "email": "driver1.s5@example.com"
+    },
+    {
+      "id": "S5-DRI-2",
+      "name": "Logan (placeholder)",
+      "role": "driver",
+      "title": "Truck driver",
+      "system": "S5",
+      "phone": "+1 713 555 0122",
+      "email": "driver2.s5@example.com"
+    },
+    {
+      "id": "S5-INS-1",
+      "name": "Peyton (placeholder)",
+      "role": "inspector",
+      "title": "Pipeline inspector",
+      "system": "S5",
+      "phone": "+1 713 555 0123",
+      "email": "inspector1.s5@example.com"
+    },
+    {
+      "id": "S5-MAI-1",
+      "name": "Cameron (placeholder)",
+      "role": "maintenance",
+      "title": "Pump technician",
+      "system": "S5",
+      "phone": "+1 713 555 0124",
+      "email": "maintenance1.s5@example.com"
+    },
+    {
+      "id": "S5-OPE-1",
+      "name": "Dakota (placeholder)",
+      "role": "operator",
+      "title": "Field operator",
+      "system": "S5",
+      "phone": "+1 713 555 0125",
+      "email": "operator1.s5@example.com"
+    }
+  ]
+}
