@@ -9,7 +9,7 @@ import {
   type EventsResponse,
   type Planning,
 } from "./api";
-import { earlyWarnings, hoursText, isSuspected, soonerMinutes, stageText, warningIndex, type Warning } from "./early";
+import { earlyWarnings, hoursText, isSuspected, soonerMinutes, stageText, verifyText, warningIndex, type Warning } from "./early";
 import { hhmm, money, shortName } from "./status";
 
 export const CATEGORY_LABEL: Record<Category, string> = {
@@ -159,10 +159,50 @@ export function EventInfo({ event, now }: { event: DetectedEvent; now: number })
           <li key={line}>{line}</li>
         ))}
       </ul>
+      <VerifyPanel event={event} now={now} />
       <PlanPanel event={event} />
     </section>
   );
 }
+
+/** Worn pump: before vs after the alarm, the 6 h verdict and the failure forecast. */
+function VerifyPanel({ event, now }: { event: DetectedEvent; now: number }) {
+  const v = event.verification;
+  if (!v) return null;
+  const pct = (x: number | null): string => (x === null ? "—" : `${(x * 100).toFixed(1)}%`);
+  const psi = (x: number | null): string => (x === null ? "—" : `${x > 0 ? "+" : ""}${x.toFixed(1)} psi`);
+  return (
+    <div className={`verify ${v.status}`}>
+      <strong>{verifyText(event, now)}</strong>
+      <table className="options">
+        <thead>
+          <tr>
+            <th>Reading (pump running)</th>
+            <th>2 h before alarm</th>
+            <th>{v.status === "pending" ? `after (${v.hours_seen.toFixed(1)} h)` : "6 h after alarm"}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Flow, % of rated</td>
+            <td>{pct(v.efficiency_before)}</td>
+            <td>{pct(v.efficiency_after)}</td>
+          </tr>
+          <tr>
+            <td>Discharge vs healthy</td>
+            <td>{psi(v.discharge_before_psi)}</td>
+            <td>{psi(v.discharge_after_psi)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="meta">
+        Verified when flow keeps falling for 6 h (trend {v.slope_z ?? "—"}σ; needs −5σ). Worn pumps here fault at about 86% flow
+        {v.forecast_fail_unix !== null && <>: trend reaches it {new Date(v.forecast_fail_unix * 1000).toISOString().slice(5, 16).replace("T", " ")}</>}.
+      </p>
+    </div>
+  );
+}
+
 
 /** Early-warning line under a row: a wear alarm that preceded a failure, seen from either end. */
 function warningNote(e: DetectedEvent, w: Warning | undefined, now: number): string | null {
@@ -195,15 +235,16 @@ export function EventRow({ event, selected, onSelect, note, stage }: {
                 : `${event.hours_to_limit?.p50.toFixed(1)} h`}
           </span>
         )}
-        {stage && <span className="stage-note">◌ {stage}</span>}
+        {stage && <span className="stage-note">{stage}</span>}
         {note && <span className="early-note">⚑ {note}</span>}
       </button>
     </li>
   );
 }
 
-export function AlertList({ state, selectedKey, onSelect }: {
+export function AlertList({ state, early = true, selectedKey, onSelect }: {
   state: EventsResponse;
+  early?: boolean; // false: the standard-check-only view (see withoutEarly)
   selectedKey: string | null;
   onSelect: (e: DetectedEvent) => void;
 }) {
@@ -222,12 +263,15 @@ export function AlertList({ state, selectedKey, onSelect }: {
       event={e}
       selected={eventKey(e) === selectedKey}
       onSelect={() => onSelect(e)}
-      note={warningNote(e, links.get(eventKey(e)), state.now_unix)}
-      stage={stageText(e, state.now_unix)}
+      note={early ? warningNote(e, links.get(eventKey(e)), state.now_unix) : e.category === "pump_failure" ? "✕ no warning beforehand" : null}
+      stage={early ? stageText(e, state.now_unix) : e.category === "pump_failure" ? null : `Detected ${hhmm(e.alarm_unix)} by the standard check`}
     />
   );
   return (
     <>
+      <p className={`mode-banner ${early ? "on" : "off"}`}>
+        {early ? "⚠ With our early alerts and warnings" : "Without our system: standard check only"}
+      </p>
       <h2>In progress ({ongoing.length})</h2>
       {ongoing.length === 0 && <p className="muted">Nothing in progress.</p>}
       <ul>{ongoing.map(row)}</ul>

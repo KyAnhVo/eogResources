@@ -45,14 +45,41 @@ export const isSuspected = (e: DetectedEvent, now: number): boolean => e.confirm
 export const soonerMinutes = (e: DetectedEvent): number | null =>
   e.confirmed_unix === null ? null : Math.round((e.confirmed_unix - e.alarm_unix) / 60);
 
+/** Worn pump: one line on the 6 h trend check, or null for other categories. */
+export function verifyText(e: DetectedEvent, now: number): string | null {
+  const v = e.verification;
+  if (!v) return null;
+  const pct = (x: number | null): string => (x === null ? "?" : `${(x * 100).toFixed(1)}%`);
+  const change = `flow ${pct(v.efficiency_before)} → ${pct(v.efficiency_after)}`;
+  switch (v.status) {
+    case "verified": {
+      const fc: string =
+        v.forecast_fail_unix === null
+          ? ""
+          : e.status === "ongoing" && v.forecast_fail_unix > now
+            ? ` · may fail in ~${hoursText((v.forecast_fail_unix - now) / 3600)}`
+            : "";
+      return `✓ verified wear: ${change}, ${v.slope_pct_per_h?.toFixed(2)}%/h${fc}`;
+    }
+    case "not_verified":
+      return `✗ not verified: no steady drop after 6 h (${change})`;
+    case "ended_before_check":
+      return "ended before the 6 h check";
+    default:
+      return `verifying… ${v.hours_seen.toFixed(1)} of 6 h (${change})`;
+  }
+}
+
 /** One line on the detection stage, or null when there is nothing early to say (faults, no gap). */
 export function stageText(e: DetectedEvent, now: number): string | null {
   if (e.category === "pump_failure") return null;
+  const alert = `⚠ Early alert ${dayTime(e.alarm_unix)}`;
   if (isSuspected(e, now)) {
-    return e.status === "ongoing" || (e.end_unix ?? 0) > now
-      ? `suspected ${hhmm(e.alarm_unix)} · not confirmed yet`
-      : `suspected ${hhmm(e.alarm_unix)} · never confirmed`;
+    return e.status === "ongoing" || (e.end_unix ?? 0) > now ? `${alert} · not confirmed yet` : `${alert} · never confirmed`;
   }
   const gap: number | null = soonerMinutes(e);
-  return gap ? `flagged ${gap} min before confirmation` : null;
+  return `${alert} → ✓ Confirmed ${hhmm(e.confirmed_unix ?? e.alarm_unix)}${gap ? ` (${gap} min later)` : ""}`;
 }
+
+/** "10-05 07:00" (UTC), the format the alert rows use. */
+const dayTime = (unix: number): string => new Date(unix * 1000).toISOString().slice(5, 16).replace("T", " ");

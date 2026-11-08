@@ -2,9 +2,14 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   datasetFromFolder,
   eventKey,
+  clearLive,
+  fetchContacts,
   fetchState,
+  publishLive,
   inScenario,
+  withoutEarly,
   uploadDataset,
+  type Contact,
   type DatasetFiles,
   type DatasetInfo,
   type DetectedEvent,
@@ -20,6 +25,12 @@ import { ActionBar, AlertList, PendingBar, WhatIfSummary } from "./panels";
 import { facilityViews, type FacilityView } from "./status";
 import { parseTelemetry, type Telemetry } from "./telemetry";
 import { SystemTabs } from "./SystemTabs";
+import { IncidentDashboard } from "./Incidents";
+import { AlertToasts } from "./AlertToasts";
+import { HomePage } from "./Home";
+import { Logo } from "./Logo";
+import { SponsorStrip } from "./Sponsors";
+import { SolutionFeed, useAutoNotify } from "./AutoNotify";
 import { Timeline } from "./Timeline";
 
 /** Folder picker button. `webkitdirectory` isn't in React's input typings, so it is set through the ref. */
@@ -63,7 +74,35 @@ export default function App() {
   const [component, setComponent] = useState<ComponentId>(SUMMARY);
   const [error, setError] = useState<string | null>(null);
   const [scenario, setScenario] = useState<Scenario>("recorded");
+  const [early, setEarly] = useState<boolean>(true); // our early alerts + warnings on, or standard check only
+  const [page, setPage] = useState<"console" | "report">("console"); // the incident report is its own page
+  const [replayed, setReplayed] = useState<boolean>(false); // "now" has left the end since loading
+  const [hideDone, setHideDone] = useState<boolean>(false); // "replay complete" banner dismissed
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [loadId, setLoadId] = useState<number>(0); // bumps per loaded folder: each incident is notified once per load
+  useEffect(() => {
+    fetchContacts().then(setContacts).catch(() => setContacts([]));
+  }, []);
+  function chooseEarly(on: boolean): void {
+    setEarly(on);
+    if (!on) setScenario("recorded"); // the fix-at-first-flag what-if needs the early flags
+  }
   const loadCount = useRef<number>(0); // results from a folder picked earlier are ignored
+
+  /** Back to the homepage: forget the loaded folder (results still in flight are ignored). */
+  function goHome(): void {
+    loadCount.current++;
+    clearLive();
+    for (const reset of [setFiles, setInfo, setNetwork, setOps, setTelemetry, setHistory, setState, setSelection, setError]) {
+      reset(null);
+    }
+    setPage("console");
+    setTab(OVERVIEW);
+    setFacility(null);
+    setReplayed(false);
+    setHideDone(false);
+    setLoadId((n) => n + 1);
+  }
 
   function pickFolder(picked: FileList): void {
     const load: number = ++loadCount.current;
@@ -80,6 +119,10 @@ export default function App() {
       return;
     }
     setFiles(ds);
+    setPage("console");
+    setReplayed(false);
+    setHideDone(false);
+    setLoadId((n) => n + 1);
     setTab(OVERVIEW);
     setFacility(null);
     const fail = (err: unknown): void => {
@@ -87,12 +130,16 @@ export default function App() {
     };
     uploadDataset(ds)
       .then(async (uploaded) => {
-        const latest: EventsResponse = await fetchState(uploaded.dataset_id, uploaded.end_unix);
+        // The whole recording (timeline bars, report), and the console starting at the first reading.
+        const [latest, first] = await Promise.all([
+          fetchState(uploaded.dataset_id, uploaded.end_unix),
+          fetchState(uploaded.dataset_id, uploaded.start_unix),
+        ]);
         if (!current()) return;
         setInfo(uploaded);
         setHistory(latest);
-        setState(latest);
-        setNow(uploaded.end_unix);
+        setState(first);
+        setNow(uploaded.start_unix);
       })
       .catch(fail);
     ds.network.text().then((t) => current() && setNetwork(JSON.parse(t) as Network)).catch(fail);
@@ -127,8 +174,10 @@ export default function App() {
   }, [now, info]);
 
   // What the console shows: the recording, or the early-fix what-if in the same shape.
-  const shown: EventsResponse | null = useMemo(() => state && inScenario(state, scenario), [state, scenario]);
-  const shownHistory: EventsResponse | null = useMemo(() => history && inScenario(history, scenario), [history, scenario]);
+  // With our early alerts and warnings (default), or as a console with only the standard check would show it.
+  const view = (s: EventsResponse): EventsResponse => (early ? inScenario(s, scenario) : withoutEarly(s));
+  const shown: EventsResponse | null = useMemo(() => state && view(state), [state, scenario, early]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownHistory: EventsResponse | null = useMemo(() => history && view(history), [history, scenario, early]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const overviewLayout: Layout | null = useMemo(() => (network ? computeLayout(network) : null), [network]);
   const systemLayouts: Map<string, Layout> = useMemo(
@@ -188,39 +237,99 @@ export default function App() {
 
   const facilityView: FacilityView | undefined = facility ? views.get(facility) : undefined;
 
+  // Loading starts "now" at the last reading; once it moves back, reaching the end again means the replay ran.
+  useEffect(() => {
+    if (!info) return;
+    if (now < info.end_unix) {
+      setReplayed(true);
+      setHideDone(false);
+    }
+  }, [now, info]);
+  const replayDone: boolean = Boolean(info && replayed && !hideDone && now === info.end_unix);
+  // Phones on /live follow this console: publish the dataset and replay position as they change.
+  useEffect(() => {
+    if (info) publishLive(info.dataset_id, now, early);
+  }, [info, now, early]);
+
+  const autoSent = useAutoNotify(state, contacts, early, loadId); // mandatory: every notice goes out when needed
+
+  /** From the report: back to the console, on the incident's moment and facility. */
+  function openFromReport(e: DetectedEvent): void {
+    setPage("console");
+    setNow(e.alarm_unix);
+    selectEvent(e);
+  }
+
   const ready: boolean = Boolean(info && network && layout && shown && shownHistory);
   return (
-    <div className={`app ${ready ? "console" : ""}`}>
+    <div className={`app ${ready && page === "console" ? "console" : ""} ${page === "report" ? "report" : ""}`}>
       <header>
-        <h1>Beat the Shutdown</h1>
+        <h1 className="brand">
+          <button className="brand-link" onClick={goHome} disabled={!files} title={files ? "Back to the main page" : undefined}>
+            <Logo size={26} />
+            Oilgorithm
+          </button>
+        </h1>
         {files && (
-          <>
-            <span className="dataset-name">{files.name}</span>
-            <FolderPicker onPick={pickFolder} label="Change folder" />
-          </>
+          <button className="home-button" onClick={goHome} title="Back to the main page">
+            ⌂ Main page
+          </button>
         )}
+        <SponsorStrip />
+        {files && <span className="dataset-name">{files.name}</span>}
         {shown && (
           <span className="now">
             now {shown.now_ts.slice(0, 16).replace("T", " ")} UTC · {shown.alert_order.length} in progress
             {scenario === "early_fix" && " · what-if"}
           </span>
         )}
+        {ready && (
+          <button className={`report-button ${page === "report" ? "active" : ""}`} onClick={() => setPage(page === "report" ? "console" : "report")}>
+            {page === "report" ? "← Back to console" : "📋 Incident report"}
+          </button>
+        )}
+        {shown && page === "console" && (
+          <div className={`mode-toggle ${early ? "on" : "off"}`} role="group" aria-label="Early alerts">
+            <button className={!early ? "active" : ""} onClick={() => chooseEarly(false)} title="Only the standard check: leaks appear when confirmed, no worn-pump warnings">
+              Without (standard only)
+            </button>
+            <button className={early ? "active" : ""} onClick={() => chooseEarly(true)} title="Our early alerts (suspected stage) and worn-pump warnings">
+              ⚠ With our early alerts
+            </button>
+          </div>
+        )}
       </header>
       {error && <p className="error">{error}</p>}
-      {!files && (
-        <section className="empty">
-          <p>Choose a dataset folder containing network.json, ops.json and telemetry.csv.</p>
-          <FolderPicker onPick={pickFolder} label="Choose folder" />
-        </section>
-      )}
+      {!files && <HomePage picker={<FolderPicker onPick={pickFolder} label="Choose dataset folder" />} />}
       {files && !ready && !error && <p className="muted">Loading {files.name}…</p>}
-      {ready && info && network && layout && state && shown && history && shownHistory && (
+      {ready && page === "report" && history && (
+        <div className="report-page">
+          <button className="back-button" onClick={() => setPage("console")}>
+            ← Back to console
+          </button>
+          <IncidentDashboard state={history} onSelect={openFromReport} sent={autoSent} earlyMode={early} />
+        </div>
+      )}
+      {ready && page === "console" && info && network && layout && state && shown && history && shownHistory && (
         <>
           <nav className="panel left">
             {scenario === "early_fix" && <WhatIfSummary fix={state.early_fix} />}
-            <AlertList state={shown} selectedKey={selection?.kind === "event" ? selection.key : null} onSelect={selectEvent} />
+            <AlertList state={shown} early={early} selectedKey={selection?.kind === "event" ? selection.key : null} onSelect={selectEvent} />
           </nav>
           <div className="map-area">
+            <AlertToasts state={state} early={early} onSelect={selectEvent} />
+            <SolutionFeed notices={[...autoSent.values()].map((x) => x.notice)} now={now} />
+            {replayDone && (
+              <div className="replay-done" role="status">
+                <span>✓ Replay complete: {history.events.length} incidents over the recording</span>
+                <button className="folder-button" onClick={() => setPage("report")}>
+                  View incident report →
+                </button>
+                <button className="action-close" onClick={() => setHideDone(true)} aria-label="Dismiss">
+                  ×
+                </button>
+              </div>
+            )}
             <SystemTabs network={network} views={views} active={tab} onSelect={openTab} />
             {selectedEvent ? (
               <ActionBar
@@ -274,9 +383,7 @@ export default function App() {
             now={now}
             onNow={setNow}
             recorded={history.events}
-            whatIf={history.early_fix.events}
-            whatIfSaved={history.early_fix.cost_recorded - history.early_fix.cost_early_fix}
-            scenario={scenario}
+            early={early}
             onScenario={setScenario}
             systems={network.systems.map((s) => s.id)}
             selectedKey={selection?.kind === "event" ? selection.key : null}

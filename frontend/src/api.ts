@@ -53,6 +53,21 @@ export interface DetectedEvent {
   hours_to_limit: { p50: number } | null;
   recommended_actions: Action[];
   planning: Planning | null; // pump failures only
+  verification: Verification | null; // worn pumps only
+}
+
+// Mirrors backend/app/verify.py verify_wear: is the pump really wearing out, and when will it fail?
+export interface Verification {
+  status: "pending" | "verified" | "not_verified" | "ended_before_check";
+  check_unix: number; // alarm + 6 h: when the verdict is given
+  hours_seen: number; // hours of readings after the alarm so far (capped at 6)
+  efficiency_before: number | null; // flow / max_flow, 2 h before the alarm
+  efficiency_after: number | null; // same, alarm .. alarm + 6 h
+  discharge_before_psi: number | null; // below (−) the healthy running value
+  discharge_after_psi: number | null;
+  slope_pct_per_h: number | null; // efficiency trend after the alarm
+  slope_z: number | null;
+  forecast_fail_unix: number | null; // when the trend reaches 86 % efficiency (verified only)
 }
 
 export interface EventsResponse {
@@ -85,6 +100,20 @@ export interface EarlyFix {
 }
 
 export type Scenario = "recorded" | "early_fix";
+
+/**
+ * The same state as a console without our early signals would show it: leaks and worn pumps only
+ * appear once the standard threshold confirms them (no "suspected" stage), and a worn pump is never
+ * shown at all (no early warning), so failures arrive unannounced.
+ */
+export function withoutEarly(s: EventsResponse): EventsResponse {
+  const events: DetectedEvent[] = s.events
+    .filter((e) => e.category !== "pump_degradation")
+    .filter((e) => e.category === "pump_failure" || (e.confirmed_unix !== null && e.confirmed_unix <= s.now_unix))
+    .map((e) => (e.category === "pump_failure" ? e : { ...e, alarm_unix: e.confirmed_unix ?? e.alarm_unix }));
+  const kept = new Set<string>(events.map((e) => e.event_id));
+  return { ...s, events, alert_order: s.alert_order.filter((id) => kept.has(id)) };
+}
 
 /** The state as the UI shows it: as recorded, or the early-fix what-if in the same shape. */
 export const inScenario = (s: EventsResponse, scenario: Scenario): EventsResponse =>
@@ -190,4 +219,65 @@ export async function uploadDataset(ds: DatasetFiles): Promise<DatasetInfo> {
 /** Detection and plans as an operator would have seen them at `now`. */
 export async function fetchState(datasetId: string, now: number): Promise<EventsResponse> {
   return readJson<EventsResponse>(await fetch(`/api/datasets/${datasetId}/state?now=${now}`), "analysis");
+}
+
+/** One crew member (backend/contacts.json; placeholder data for now). */
+export interface Contact {
+  id: string;
+  name: string;
+  role: "supervisor" | "driver" | "inspector" | "maintenance" | "operator";
+  title: string;
+  system: string | null;
+  phone: string;
+  email: string;
+}
+
+export interface NotifyResult {
+  event_id: string;
+  sent_unix: number;
+  message: string;
+  results: { to: string; phone: string; email: string; status: string }[];
+  unknown: string[];
+}
+
+export async function fetchContacts(): Promise<Contact[]> {
+  return (await readJson<{ contacts: Contact[] }>(await fetch("/api/contacts"), "contacts")).contacts;
+}
+
+/** Send a decision to crew members. The backend sender is a placeholder: nothing is delivered yet. */
+export async function sendNotify(eventId: string, contactIds: string[], message: string): Promise<NotifyResult> {
+  const res: Response = await fetch("/api/notify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ event_id: eventId, contact_ids: contactIds, message }),
+  });
+  return readJson<NotifyResult>(res, "notify");
+}
+
+/** What the presenter's console is showing, for phones on /live (backend /api/live). */
+export interface LiveInfo {
+  dataset_id: string;
+  name: string;
+  start_unix: number;
+  end_unix: number;
+  step_s: number;
+  now: number;
+  early: boolean;
+}
+
+export async function fetchLive(): Promise<LiveInfo | null> {
+  return (await readJson<{ live: LiveInfo | null }>(await fetch("/api/live"), "live")).live;
+}
+
+/** Presenter: publish the dataset and replay position. Failures are ignored (viewers just lag). */
+export function publishLive(datasetId: string, now: number, early: boolean): void {
+  fetch("/api/live", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ dataset_id: datasetId, now, early }),
+  }).catch(() => undefined);
+}
+
+export function clearLive(): void {
+  fetch("/api/live", { method: "DELETE" }).catch(() => undefined);
 }
